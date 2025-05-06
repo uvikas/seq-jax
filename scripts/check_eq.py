@@ -1,4 +1,4 @@
-"""Convert checkpoint from torch to jax"""
+"""Load vitb pretrained and compare outputs between torch and jax"""
 
 import jax
 import torch
@@ -38,9 +38,7 @@ torch_enc = vit_torch.Encoder(
 key = jax.random.key(0)
 init_rngs = nnx.Rngs(params=key, dropout=key)
 jax_enc = vit_jax.VisionEncoder(
-    model_name="vitb-mae-egosoup",
-    pretrain_dir="/path/to/pretrained/encoders_jax",
-    freeze=True,
+    cfg=vit_jax.VisionEncoderConfig(),
     rngs=init_rngs,
 )
 backbone = jax_enc.backbone

@@ -10,6 +10,7 @@ import orbax.checkpoint as ocp
 
 from absl import logging
 from dataclasses import dataclass, field
+from flax import nnx
 from flax.training import train_state, checkpoints
 from functools import partial
 from jax import random
@@ -114,14 +115,14 @@ def train(cfg: TrainConfig):
     logging.info(f"Jax process: {jax.process_index()} / {jax.process_count()}")
     logging.info(f"Jax devices: {jax.device_count()}")
 
-    rng = random.key(cfg.seed)
+    rngs = nnx.Rngs(0)
 
     # Setup training components
     dataloader = make_dataloader(cfg.data)
-    model = make_model(cfg.model)
+    model = make_model(cfg.model, rngs=rngs)
     lr_scheduler = make_lr_scheduler(cfg.optim)
     meter = make_meter(cfg.logging)
-    state = make_train_state(rng, cfg, model, lr_scheduler)
+    state = make_train_state(cfg, model, lr_scheduler)
 
     ptrain_step = jax.pmap(
         partial(

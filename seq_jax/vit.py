@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
 
-
+from dataclasses import dataclass
 from flax import nnx
 from functools import partial
 
@@ -745,6 +745,17 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
     return model
 
 
+@dataclass
+class VisionEncoderConfig:
+    name: str = "vitb-mae-egosoup"
+    pretrain_dir: str = "/path/to/pretrained/encoders_jax"
+    freeze: bool = True
+    im_dim: int = 224
+    embed_dim: int = 768
+    dtype: str = "float32"
+    feat_dtype: str = "float16"
+
+
 class VisionEncoder(nnx.Module):
     """
     NNX Vision Transformer encoder wrapper.
@@ -754,38 +765,35 @@ class VisionEncoder(nnx.Module):
 
     def __init__(
         self,
-        model_name: str,
-        *,
-        pretrain_dir: Optional[str] = None,
-        freeze: bool = True,  # Store intent to freeze
+        cfg: VisionEncoderConfig,
         rngs: nnx.Rngs,  # Required for backbone initialization
         **kwargs,  # Pass additional args (like img_size) to backbone
     ):
-        self.model_name = model_name
-        self.freeze = freeze  # Store the user's intention
+        self.name = cfg.name
+        self.freeze = cfg.freeze  # Store the user's intention
 
         # Determine pretrain path
         pretrain_path: Optional[str] = "none"  # Default to scratch
-        if pretrain_dir and model_name in _MODELS:
-            path = os.path.join(pretrain_dir, _MODELS[model_name])
+        if cfg.pretrain_dir and cfg.name in _MODELS:
+            path = os.path.join(cfg.pretrain_dir, _MODELS[cfg.name])
             if os.path.exists(path):
                 pretrain_path = path
             else:
                 print(
                     f"Warning: Pretrain path not found: {path}. Training from scratch."
                 )
-        elif model_name not in _MODELS and model_name not in [
+        elif cfg.name not in _MODELS and cfg.name not in [
             "regnet_y_3_2gf",
             "regnet_y_16gf",
             "regnet_y_800mf",
         ]:  # Add other known non-ViT models here
             print(
-                f"Warning: Model name '{model_name}' not in known models or RegNets. Assuming scratch training."
+                f"Warning: Model name '{cfg.name}' not in known models or RegNets. Assuming scratch training."
             )
 
         # Instantiate the appropriate backbone
         # Pass rngs down for initialization
-        match model_name:
+        match cfg.name:
             # case "vits-mae-hoi" | "vits-mae-egosoup":
             #     self.backbone = vit_s16_nnx(pretrain_path, rngs=rngs, **kwargs)
             #     self.emb_dim = 384
@@ -802,16 +810,16 @@ class VisionEncoder(nnx.Module):
             #     self.backbone = vit_h16_nnx(pretrain_path, rngs=rngs, **merged_kwargs)
             #     self.emb_dim = 1280
             case _:
-                raise NotImplementedError(f"Unknown model name: {model_name}")
+                raise NotImplementedError(f"Unknown model name: {cfg.name}")
 
         # Information about freezing (handled externally)
         if self.freeze:
-            print(f"NNX: Intent is to freeze backbone parameters for {model_name}.")
+            print(f"NNX: Intent is to freeze backbone parameters for {cfg.name}.")
             # You might want to print the paths that *should* be frozen
             # frozen_paths = self.get_frozen_parameter_paths()
             # print(f"   (Optimizer should freeze {len(frozen_paths)} parameter paths)")
         else:
-            print(f"NNX: Intent is to train backbone parameters for {model_name}.")
+            print(f"NNX: Intent is to train backbone parameters for {cfg.name}.")
 
     @property
     def frozen_parameter_paths(self) -> List[Tuple[str, ...]]:
@@ -840,58 +848,3 @@ class VisionEncoder(nnx.Module):
         # out = out.astype(x.dtype) # Removed - generally not needed
 
         return out
-
-
-if __name__ == "__main__":
-    # 1. Setup NNX GraphDef and State
-    key = jax.random.key(0)
-    # NNX requires splitting keys for different purposes (params, dropout, etc.)
-    # The nnx.Rngs object helps manage this.
-    init_rngs = nnx.Rngs(params=key, dropout=key)  # Use same key for simplicity here
-
-    # Instantiate the model - requires passing rngs for initialization
-    model = VisionTransformer(
-        img_size=32,  # Smaller for quick test
-        patch_size=4,
-        in_chans=3,
-        num_classes=10,
-        embed_dim=128,
-        depth=2,  # Shallow depth
-        num_heads=4,
-        mlp_ratio=2.0,
-        rngs=init_rngs,
-    )
-
-    # Create dummy input data (N, C, H, W)
-    dummy_input = jnp.ones((4, 3, 32, 32))
-
-    # Get the initial state and graph definition
-    # state, graphdef = model.partition() # Older NNX API
-    # state = nnx.state(model) # Get mutable state
-    # graphdef = nnx.graphdef(model) # Get graph definition (structure, static parts)
-
-    # --- NNX Execution (using nnx.context) ---
-    # Run the model in training mode (requires dropout RNG)
-    call_rngs = nnx.Rngs(dropout=jax.random.key(1))
-    # Using nnx.context ensures state updates (like batch norm stats if used) are captured
-    with nnx.context(call_rngs):
-        output_train = model(dummy_input, train=True)
-
-    # Run the model in inference mode (deterministic)
-    with (
-        nnx.context()
-    ):  # No RNGs needed for deterministic call unless module expects object
-        output_infer = model(dummy_input, train=False)
-
-    # Print output shapes
-    print("Input shape:", dummy_input.shape)
-    print("Output shape (train):", output_train.shape)
-    print("Output shape (infer):", output_infer.shape)
-
-    # You can access parameters and state like this:
-    # print("\nModel State Structure (example):")
-    # print(jax.tree_map(lambda x: x.shape if hasattr(x, 'shape') else x, nnx.state(model)))
-
-    # Example of accessing a specific parameter
-    # print("\nCLS Token shape:", model.cls_token.value.shape)
-    # print("Patch Embed Conv Kernel shape:", model.patch_embed.proj.kernel.value.shape)
