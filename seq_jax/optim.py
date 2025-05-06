@@ -13,6 +13,7 @@ class OptimConfig:
 
     scheduler: str = "cosine"
     warmup_steps: int = 1000
+    num_steps: int = 10_000
     final_lr_ratio: float = 0.0  # Final LR is lr * final_lr_ratio
 
 

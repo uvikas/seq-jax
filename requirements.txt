@@ -1,4 +1,6 @@
-jax
+jax[cuda12]
 flax
 optax
 orbax-checkpoint
+torch
+tensorflow

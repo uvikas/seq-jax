@@ -1,14 +1,17 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass
+class WandbConfig:
+    project: str = "seq-jax"
+    entity: str = "my-gcp-project"
+    mode: str = "online"
 
 
 @dataclass
 class LoggingConfig:
-    logdir: str = "/tmp/bc/"
     save_freq: int = 1000
-
-    wandb_project: str
-    wandb_entity: str = "my-gcp-project"
-    wandb_mode: str = "online"
+    wandb: WandbConfig = field(default_factory=WandbConfig)
 
 
 def make_meter(cfg: LoggingConfig):

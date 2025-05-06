@@ -9,7 +9,7 @@ import optax
 import orbax.checkpoint as ocp
 
 from absl import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from flax.training import train_state, checkpoints
 from functools import partial
 from jax import random
@@ -24,23 +24,17 @@ from seq_jax.optim import OptimConfig, make_optimizer, make_lr_scheduler
 
 @dataclass
 class TrainConfig:
-    exp_name: str
+    exp_name: str = "fold"
     logdir: str = "/tmp/bc/"
-
-    # Train settings
     seed: int = 0
-    num_gpus: int = 1
-    mb_size: int = 128
-    warmup_steps: int = 1_000
-    num_steps: int = 10_000
-    grad_accum_steps: int = 1
+    platform: str = "gpu"
 
-    data: DataConfig
-    optim: OptimConfig
-    model: ModelConfig
-    distributed: DistributedConfig
-    env: EnvConfig
-    logging: LoggingConfig
+    data: DataConfig = field(default_factory=DataConfig)
+    optim: OptimConfig = field(default_factory=OptimConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    distributed: DistributedConfig = field(default_factory=DistributedConfig)
+    env: EnvConfig = field(default_factory=EnvConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
 class TrainState(train_state.TrainState):
@@ -48,8 +42,8 @@ class TrainState(train_state.TrainState):
     ema_params: Any
 
 
-def initialized(rng: jax.random.KeyArray, image_size: int, model: Any):
-    """Initialize model parameters."""
+def initialized(rng: jax.Array, image_size: int, model: Any):
+    """Initialize model parameters with dummy input."""
     input_shape = (1, image_size, image_size, 3)
 
     @jax.jit
@@ -61,7 +55,7 @@ def initialized(rng: jax.random.KeyArray, image_size: int, model: Any):
 
 
 def make_train_state(
-    rng: jax.random.KeyArray,
+    rng: jax.Array,
     cfg: TrainConfig,
     model: Any,
     lr_scheduler: optax.Schedule,
@@ -96,11 +90,11 @@ def train_step(
     """Perform a training step."""
     lr = lr_scheduler(state.step)
 
-    def compute_loss(params: Any):
+    def loss_fn(params: Any):
         pass
 
     # Compute loss and gradients
-    grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
+    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     aux, grads = grad_fn(state.params)
     # Average gradients across devices
     grads = lax.pmean(grads, axis_name="batch")
@@ -129,7 +123,7 @@ def train(cfg: TrainConfig):
     meter = make_meter(cfg.logging)
     state = make_train_state(rng, cfg, model, lr_scheduler)
 
-    p_train_step = jax.pmap(
+    ptrain_step = jax.pmap(
         partial(
             train_step,
             lr_scheduler=lr_scheduler,
@@ -145,12 +139,12 @@ def train(cfg: TrainConfig):
     for step in range(state.step, cfg.num_steps):
         data = next(dataloader)
         # Perform training step
-        state, metrics = p_train_step(state, data)
+        state, metrics = ptrain_step(state, data)
         meter.update(metrics)
 
         # Save a checkpoint
         if (step + 1) % cfg.logging.save_freq == 0:
-            save_checkpoint(state, cfg.logging.logdir, step)
+            save_checkpoint(state, cfg.logdir, step)
 
     # Wait until computations are done before exiting
     jax.random.normal(jax.random.key(0), ()).block_until_ready()
@@ -158,10 +152,9 @@ def train(cfg: TrainConfig):
 
 def get_cfg() -> TrainConfig:
     cli_args = OmegaConf.from_cli()
-    file_cfg = OmegaConf.load(cli_args.config)
-    del cli_args.config
-    default_cfg = OmegaConf.structured(TrainConfig)
-    cfg = OmegaConf.merge(default_cfg, file_cfg, cli_args)
+    default_cfg = OmegaConf.structured(TrainConfig())
+    cfg = OmegaConf.merge(default_cfg, cli_args)
+    print(OmegaConf.to_yaml(cfg))
     cfg = OmegaConf.to_object(cfg)
     return cfg
 
