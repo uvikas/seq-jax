@@ -19,12 +19,12 @@ from functools import partial
 
 @struct.dataclass
 class Observation:
-    # Image rgb (B, T, H, W, 3)
-    img_rgb: jnp.ndarray
-    # Image features (B, T, P, C)
-    img_feat: jnp.ndarray | None
-    # Pooled img features (B, T, C)
-    img_pooled: jnp.ndarray | None
+    # Image rgb (B, T, H, W, 3) * V
+    img_rgb: List[jnp.ndarray] | None
+    # Image features (B, T, P, C) * V
+    img_feat: List[jnp.ndarray] | None
+    # Pooled img features (B, T, C) * V
+    img_pooled: List[jnp.ndarray] | None
     # Robot state (B, T, D)
     state: jnp.ndarray
     # Robot prev action (B, T, D)
@@ -34,7 +34,11 @@ class Observation:
 
 
 @struct.dataclass
-class Action:
+class Prediction:
+    # Pooled img features (B, T, A, C) * V
+    img_pooled: List[jnp.ndarray] | None
+    # Robot state (B, T, A, D)
+    state: jnp.ndarray | None
     # Action (B, T, A, D)
     action: jnp.ndarray
 
@@ -105,12 +109,22 @@ class MLP(nnx.Module):
             ortho_init = jax.nn.initializers.orthogonal(scale=gain)
             # Get the last layer (which is the final Linear layer)
             last_layer = self.net.layers[-1]
-            # Apply the initializer to reinitialize the weights
-            last_layer.kernel = ortho_init(
-                rngs.params(), last_layer.kernel.shape, last_layer.kernel.dtype
+            # Initialize new kernel with orthogonal initialization
+            kernel_shape = last_layer.kernel.shape
+            kernel_dtype = last_layer.kernel.dtype
+            new_kernel = ortho_init(rngs.params(), kernel_shape, kernel_dtype)
+            # Create new Linear layer with updated kernel
+            new_last_layer = nnx.Linear(
+                in_features=kernel_shape[0],
+                out_features=kernel_shape[1],
+                kernel_init=lambda *_: new_kernel,
+                bias_init=lambda *_: last_layer.bias,
+                rngs=rngs,
             )
+            # Update the Sequential layers
+            self.net.layers[-1] = new_last_layer
 
-    def forward(self, x):
+    def __call__(self, x, *, deterministic: bool, rngs: nnx.Rngs):
         return self.net(x)
 
 
@@ -175,7 +189,7 @@ class QueryPool(nnx.Module):
         )
 
     def __call__(
-        self, im_emb: jnp.ndarray, *, deterministic: bool = True
+        self, im_emb: jnp.ndarray, *, deterministic: bool, rngs: nnx.Rngs
     ) -> jnp.ndarray:
         """
         im_emb: [batch, T, N, C]  (C == input_dim)
@@ -201,7 +215,7 @@ class QueryPool(nnx.Module):
         # scaled dot‐product attention
         q = q * self.scale
         attn_logits = jnp.einsum("bhqd,bhkd->bhqk", q, k)
-        attn = jnp.softmax(attn_logits, axis=-1)
+        attn = jax.nn.softmax(attn_logits, axis=-1)
         weighted = jnp.einsum("bhqk,bhkd->bhqd", attn, v)
 
         # reshape back to (b, T, num_query * C)
@@ -209,7 +223,7 @@ class QueryPool(nnx.Module):
         out = out.reshape((b, T, self.num_query * C))
 
         # MLP head + dropout
-        out = self.mlp(out)
+        out = self.mlp(out, deterministic=deterministic, rngs=rngs)
         out = nnx.Dropout(rate=self.drop)(out, deterministic=deterministic)
 
         return out
@@ -300,6 +314,7 @@ class TransformerEncoderBlock(nnx.Module):
             out_features=hidden_d,
             dropout_rate=attn_dropout,
             rngs=rngs,
+            decode=False,
         )
         self.ln_2 = layernorm(hidden_d, rngs=rngs)
         self.mlp_block = MLPBlock(
@@ -318,12 +333,11 @@ class TransformerEncoderBlock(nnx.Module):
         rngs: nnx.Rngs,
     ) -> jax.Array:
         x_p = self.ln_1(x)
-        x_p, _ = self.attention(
+        x_p = self.attention(
             x_p,
             x_p,
             x_p,
-            need_weights=False,
-            attn_mask=attn_mask,
+            mask=attn_mask,
             deterministic=deterministic,
             rngs=rngs,
         )
@@ -427,6 +441,7 @@ class TransformerConcatPolicy(nnx.Module):
 
         self.input_dim = sum(inp_dims)
         self.output_dim = sum(out_dims)
+        self.split_output = jnp.cumsum(jnp.array(out_dims))
 
         self.in_proj = MLP(
             self.input_dim,
@@ -476,24 +491,39 @@ class TransformerConcatPolicy(nnx.Module):
         *,
         deterministic: bool,
         rngs: nnx.Rngs,
-    ) -> Action:
+    ) -> Prediction:
         # (B, T, 3*C + D + D)
         x = jnp.concatenate(
-            [
-                obs.img_feat,
+            obs.img_pooled
+            + [
                 obs.state,
                 # obs.prev_action,
             ],
             axis=-1,
         )
 
-        x = self.in_proj(x)
+        x = self.in_proj(x, deterministic=deterministic, rngs=rngs)
         x = x + self.pos_embed
         x = self.encoder(x, attn_mask, deterministic=deterministic, rngs=rngs)
 
         if self.multihead_proj:
-            x = jnp.concatenate([proj(x) for proj in self.out_proj], axis=-2)
+            img_pooled, state, action = [], [], []
+            for proj in self.out_proj:
+                out = proj(x)
+                splits = jnp.split(out, self.output_dims, axis=-1)
+                img_pooled.append(splits[:3])
+                state.append(splits[3])
+                action.append(splits[4])
+            img_pooled = jnp.stack(img_pooled, axis=1)
+            state = jnp.stack(state, axis=1)
+            action = jnp.stack(action, axis=1)
+            return Prediction(img_pooled=img_pooled, state=state, action=action)
         else:
-            x = self.out_proj(x)
-
-        return x
+            x = self.out_proj(x, deterministic=deterministic, rngs=rngs)
+            splits = jnp.split(x, self.split_output, axis=-1)
+            img_pooled, state, action = splits[:3], splits[3], splits[4]
+            return Prediction(
+                img_pooled=[jnp.expand_dims(img, axis=2) for img in img_pooled],
+                state=jnp.expand_dims(state, axis=2),
+                action=jnp.expand_dims(action, axis=2),
+            )

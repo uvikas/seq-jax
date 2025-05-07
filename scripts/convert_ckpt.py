@@ -38,9 +38,10 @@ torch_enc = vit_torch.Encoder(
 key = jax.random.key(0)
 init_rngs = nnx.Rngs(params=key, dropout=key)
 jax_enc = vit_jax.VisionEncoder(
-    model_name="vitb-mae-egosoup",
-    pretrain_dir="/path/to/pretrained/encoders_jax",
-    freeze=True,
+    vit_jax.VisionEncoderConfig(
+        name="vitb-mae-egosoup",
+        pretrain_dir="/path/to/pretrained/encoders_jax",
+    ),
     rngs=init_rngs,
 )
 
@@ -123,13 +124,11 @@ for k in dd:
     assert np.allclose(torch_weights, jax_weights)
 
 
-# _, state = nnx.split(jax_enc.backbone)
-# state = nnx.filter_state(state, nnx.Param)
-
-# nnx.display(state)
-
-# checkpointer = ocp.StandardCheckpointer()
-# checkpointer.save(ckpt_dir / "mae_pretrain_egosoup_vit_base.jax", state)
-# checkpointer.wait_until_finished()
+_, state = nnx.split(jax_enc.backbone)
+state = nnx.filter_state(state, nnx.Param)
+nnx.display(state)
+checkpointer = ocp.StandardCheckpointer()
+checkpointer.save(ckpt_dir / "mae_pretrain_egosoup_vit_base.jax", state)
+checkpointer.wait_until_finished()
 
 print("Done!!")

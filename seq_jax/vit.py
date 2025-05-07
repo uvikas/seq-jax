@@ -624,80 +624,6 @@ class VisionTransformerExtractor(VisionTransformer):
 
         return output
 
-    def get_frozen_parameter_paths(self) -> List[Tuple[str, ...]]:
-        """
-        Returns the NNX state paths for parameters that should be frozen
-        based on the original PyTorch `freeze` method logic.
-        This list can be used externally to configure the optimizer.
-
-        Returns:
-            List of tuples, where each tuple represents the path to a frozen parameter.
-        """
-        frozen_paths = []
-        state = nnx.state(self)  # Get the current state (including parameters)
-
-        # Use nnx.repr_util.flatten_mapping or similar to iterate through state paths
-        # Or manually define the paths based on module structure
-        paths_to_freeze = [
-            ("pos_embed",),
-            ("cls_token",),
-            ("patch_embed",),  # Freezes all params within patch_embed
-            ("blocks",),  # Freezes all params within all blocks
-            ("norm",),  # Freezes params within the final norm
-        ]
-
-        flat_state = nnx.state.flatten_state(state)
-
-        for path, value in flat_state.items():
-            # Check if the path starts with any of the prefixes/paths to freeze
-            for freeze_prefix in paths_to_freeze:
-                # Check if path tuple starts with freeze_prefix tuple
-                if (
-                    len(path) >= len(freeze_prefix)
-                    and path[: len(freeze_prefix)] == freeze_prefix
-                ):
-                    # Only add if it's actually a Parameter (or BatchStat, etc. if needed)
-                    # Check if the original value in the nested state is a Param
-                    # This requires navigating the original state, which is tricky.
-                    # A simpler approach is to assume anything under these paths is frozen.
-                    # Let's refine this to check if the leaf is an nnx.Param
-                    current = state
-                    is_param = False
-                    try:
-                        for key in path:
-                            if isinstance(
-                                key, nnx.graph.NodeId
-                            ):  # Skip NodeId if present in path
-                                continue
-                            if isinstance(current, (list, tuple)) and isinstance(
-                                key, int
-                            ):
-                                current = current[key]
-                            elif hasattr(current, key):
-                                current = getattr(current, key)
-                            else:  # Path invalid
-                                current = None  # Break inner loop
-                                break
-                        if isinstance(current, nnx.Param):
-                            is_param = True
-                    except (KeyError, IndexError, AttributeError, TypeError):
-                        pass  # Path might not lead to a valid leaf in some cases
-
-                    if is_param:
-                        frozen_paths.append(path)
-                        break  # Move to the next path in flat_state
-
-        # Deduplicate paths if necessary (though flatten_state should give unique paths)
-        # Using list(set(frozen_paths)) might change order if that matters
-        unique_frozen_paths = []
-        seen_paths = set()
-        for path in frozen_paths:
-            if path not in seen_paths:
-                unique_frozen_paths.append(path)
-                seen_paths.add(path)
-
-        return unique_frozen_paths
-
 
 _MODELS = {
     "vits-mae-hoi": "mae_pretrain_hoi_vit_small.jax",
@@ -729,17 +655,10 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
         lambda: VisionTransformerExtractor(**model_kwargs, rngs=nnx.Rngs(0))
     )
     graphdef, rng_state, other_state = nnx.split(abstract_model, nnx.RngState, ...)
-    # param_state = nnx.filter_state(other_state, nnx.Param, ...)
-    # print("param_state", other_state)
+
     state_restored = checkpointer.restore(pretrained, other_state)
     state_restored = nnx.merge_state(state_restored, rng_state)
     model = nnx.merge(graphdef, state_restored)
-
-    # checkpointer = ocp.StandardCheckpointer()
-    # graphdef, state = nnx.split(model)
-    # print("old_state", state)
-    # state_restored = checkpointer.restore(pretrained, state)
-    # model = nnx.merge(graphdef, state_restored)
 
     print("Loaded encoder from: {}".format(pretrained))
     return model
@@ -749,7 +668,6 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
 class VisionEncoderConfig:
     name: str = "vitb-mae-egosoup"
     pretrain_dir: str = "/path/to/pretrained/encoders_jax"
-    freeze: bool = True
     im_dim: int = 224
     embed_dim: int = 768
     dtype: str = "float32"
@@ -770,7 +688,6 @@ class VisionEncoder(nnx.Module):
         **kwargs,  # Pass additional args (like img_size) to backbone
     ):
         self.name = cfg.name
-        self.freeze = cfg.freeze  # Store the user's intention
 
         # Determine pretrain path
         pretrain_path: Optional[str] = "none"  # Default to scratch
@@ -811,26 +728,6 @@ class VisionEncoder(nnx.Module):
             #     self.emb_dim = 1280
             case _:
                 raise NotImplementedError(f"Unknown model name: {cfg.name}")
-
-        # Information about freezing (handled externally)
-        if self.freeze:
-            print(f"NNX: Intent is to freeze backbone parameters for {cfg.name}.")
-            # You might want to print the paths that *should* be frozen
-            # frozen_paths = self.get_frozen_parameter_paths()
-            # print(f"   (Optimizer should freeze {len(frozen_paths)} parameter paths)")
-        else:
-            print(f"NNX: Intent is to train backbone parameters for {cfg.name}.")
-
-    @property
-    def frozen_parameter_paths(self) -> List[Tuple[str, ...]]:
-        """
-        Returns the parameter paths intended to be frozen if self.freeze is True.
-        Delegates to the backbone's method.
-        """
-        if self.freeze and hasattr(self.backbone, "get_frozen_parameter_paths"):
-            return self.backbone.get_frozen_parameter_paths()
-        else:
-            return []
 
     def __call__(
         self,

@@ -16,6 +16,8 @@ class OptimConfig:
     num_steps: int = 10_000
     final_lr_ratio: float = 0.0  # Final LR is lr * final_lr_ratio
 
+    ema_alpha: float = 1e-5
+
 
 def make_optimizer(
     cfg: OptimConfig, lr_scheduler: optax.Schedule
