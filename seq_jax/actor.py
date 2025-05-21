@@ -28,7 +28,7 @@ class ModelConfig:
     num_cams: int = 3
     dofs: int = 24
 
-    freeze_filter: str = ".*img_encoder.*"
+    frozen_filter: str = ".*img_encoder.*"
 
     encoder: VisionEncoderConfig = field(default_factory=VisionEncoderConfig)
     policy: TransformerConcatPolicyConfig = field(
@@ -133,17 +133,18 @@ class TransformerConcatActor(nnx.Module):
 
         if policy_in.img_feat is None:
             # Extract features from rgb
-            policy_in = policy_in.replace(
-                img_feat=self.img_encoder(
-                    policy_in.img_rgb, deterministic=deterministic, rngs=rngs
-                )
+            img_feat = self.img_encoder(
+                policy_in.img_rgb, deterministic=deterministic, rngs=rngs
             )
+            policy_in = policy_in.replace(img_feat=img_feat)
 
-        policy_in = policy_in.replace(
-            img_pooled=self.pool_feats(
-                policy_in.img_feat, deterministic=deterministic, rngs=rngs
-            )
+        img_pooled = self.pool_feats(
+            [policy_in.img_feat[:, :, i] for i in range(self.cfg.num_cams)],
+            deterministic=deterministic,
+            rngs=rngs,
         )
+        print("img_pooled", [im.shape for im in img_pooled])
+        policy_in = policy_in.replace(img_pooled=img_pooled)
         pred_act = self.policy(
             policy_in, attn_mask, deterministic=deterministic, rngs=rngs
         )

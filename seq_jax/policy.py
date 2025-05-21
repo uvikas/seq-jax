@@ -441,7 +441,8 @@ class TransformerConcatPolicy(nnx.Module):
 
         self.input_dim = sum(inp_dims)
         self.output_dim = sum(out_dims)
-        self.split_output = jnp.cumsum(jnp.array(out_dims))
+        # Must be static tuple
+        self.split_output = tuple(np.array(out_dims).cumsum())
 
         self.in_proj = MLP(
             self.input_dim,
@@ -493,6 +494,8 @@ class TransformerConcatPolicy(nnx.Module):
         rngs: nnx.Rngs,
     ) -> Prediction:
         # (B, T, 3*C + D + D)
+
+        print("policy", [im.shape for im in obs.img_pooled], obs.state.shape)
         x = jnp.concatenate(
             obs.img_pooled
             + [

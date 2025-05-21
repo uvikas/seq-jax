@@ -214,11 +214,11 @@ class Mlp(nnx.Module):
             in_features, hidden_features, use_bias=use_bias[0], rngs=rngs
         )
         self.act = act_layer
-        self.drop1 = nnx.Dropout(drop, rngs=rngs)
+        self.drop1 = nnx.Dropout(drop)
         self.fc2 = nnx.Linear(
             hidden_features, out_features, use_bias=use_bias[1], rngs=rngs
         )
-        self.drop2 = nnx.Dropout(drop, rngs=rngs)
+        self.drop2 = nnx.Dropout(drop)
 
     def __call__(
         self, x: jax.Array, *, deterministic: bool, rngs: nnx.Rngs
@@ -386,7 +386,7 @@ class VisionTransformer(nnx.Module):
             jax.random.normal(rngs.params(), (1, embed_len, embed_dim)) * 0.02
         )
         self.pos_embed = nnx.Param(pos_embed_init)
-        self.pos_drop = nnx.Dropout(drop_rate, rngs=rngs)
+        self.pos_drop = nnx.Dropout(drop_rate)
 
         # Stochastic Depth Decay Rule
         dpr = [x for x in np.linspace(0, drop_path_rate, depth)]

@@ -11,3 +11,10 @@ pip install -e .
 python tools/train.py
 ```
 
+## Todo
+- [ ] Meter + metrics + wandb
+- [ ] Checkpoint
+- [ ] EMA
+- [ ] Distributed
+- [ ] Sanity check outputs from pretrained model
+- [ ] pjit and other optimizations

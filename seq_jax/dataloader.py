@@ -3,22 +3,25 @@
 from typing import List
 import os
 
+import jax
 import jax.numpy as jnp
 import numpy as np
-import omegaconf
 import webdataset as wds
 
 from dataclasses import dataclass, field
+from jax.sharding import NamedSharding
 from functools import partial
 from glob import glob
-from torch.utils.data import DataLoader
+
+from seq_jax import util
+from seq_jax.policy import Observation, Prediction
 
 
 @dataclass
 class DataConfig:
     dataset_type: str = "wds"
     chunked: bool = False
-    mb_size: int = 128
+    mb_size: int = 32
     shufflebuffer: int = 8192
     shardshuffle: int = 1000
     num_workers: int = 4
@@ -139,16 +142,16 @@ def wds_collate_fn(
     noise_std: np.array,
     noise_scale: float,
     action_type: str,
+    context_len: int,
+    pred_len: int,
+    sharding: NamedSharding,
 ):
     vision, states, actions, masks = batch
-
-    print(vision.shape, states.shape, actions.shape, masks.shape)
 
     if action_type == "absolute":
         states -= default_pos
         actions -= default_pos
     elif action_type == "relative":
-        # Normalize states [0,1]
         actions = actions - states
         # states = (states - joint_ranges[:, 0]) / (
         #     joint_ranges[:, 1] - joint_ranges[:, 0]
@@ -167,16 +170,34 @@ def wds_collate_fn(
     actions = jnp.array(actions)
     masks = jnp.array(masks)
 
-    print(
-        "converted",
-        vision.shape,
-        states.shape,
-        noisy_states.shape,
-        actions.shape,
-        masks.shape,
+    obs = Observation(
+        img_rgb=None,
+        img_feat=vision,
+        img_pooled=None,
+        state=states,
+        prev_action=actions,
+        mask=masks,
+    )
+    pred = Prediction(
+        img_pooled=None,
+        state=None,
+        action=jnp.stack(
+            [actions[:, i : i + pred_len, ...] for i in range(context_len)],
+            axis=1,
+        ),
     )
 
-    return (vision, states, noisy_states, actions, masks)
+    print("sharding", sharding)
+    print(util.array_tree_to_info(obs))
+
+    obs = jax.tree.map(
+        lambda x: jax.make_array_from_process_local_data(sharding, x), obs
+    )
+    pred = jax.tree.map(
+        lambda x: jax.make_array_from_process_local_data(sharding, x), pred
+    )
+
+    return obs, pred
 
 
 def random_segmenter(ctx_len: int, action_len: int):
@@ -259,7 +280,7 @@ def make_dataset(cfg: DataConfig, num_devices: int) -> wds.WebDataset:
                 >= cfg.actor.context_len + cfg.actor.action_len
             )
             .map(random_segmenter(cfg.actor.context_len, cfg.actor.action_len))
-            .batched(cfg.mb_size // num_devices)
+            .batched(cfg.mb_size)
         )
     else:
         dataset = (
@@ -267,13 +288,15 @@ def make_dataset(cfg: DataConfig, num_devices: int) -> wds.WebDataset:
             .decode("torch")
             .repeat()
             .to_tuple("vision.npy", "state.npy", "action.npy", "mask.npy")
-            .batched(cfg.mb_size // num_devices)
+            .batched(cfg.mb_size)
         )
     return dataset
 
 
-def make_dataloader(cfg: DataConfig, num_devices: int) -> wds.WebLoader:
-    dataset = make_dataset(cfg, num_devices)
+def make_dataloader(
+    cfg: DataConfig, context_len: int, pred_len: int, sharding: NamedSharding
+) -> wds.WebLoader:
+    dataset = make_dataset(cfg, sharding.num_devices)
     dataloader = wds.WebLoader(
         dataset,
         batch_size=None,
@@ -286,6 +309,9 @@ def make_dataloader(cfg: DataConfig, num_devices: int) -> wds.WebLoader:
             noise_scale=cfg.joint_noise_std_scale,
             # joint_ranges=np.array(cfg.joint_ranges),
             action_type=cfg.action_type,
+            context_len=context_len,
+            pred_len=pred_len,
+            sharding=sharding,
         ),
         pin_memory=True,
         persistent_workers=False,
