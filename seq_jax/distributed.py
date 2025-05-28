@@ -13,7 +13,7 @@ class _MeshState:
 @dataclass
 class DistributedConfig:
     platform: str = "gpu"
-    num_devices: int = 1
+    num_devices: int = 8
     spawn_method: str = "fork"
 
 

@@ -27,6 +27,8 @@ class Observation:
     img_pooled: List[jnp.ndarray] | None
     # Robot state (B, T, D)
     state: jnp.ndarray
+    # Noisy robot state (B, T, D)
+    noisy_state: jnp.ndarray
     # Robot prev action (B, T, D)
     prev_action: jnp.ndarray
     # Autoregressive mask (B, T)

@@ -5,11 +5,13 @@ import os
 
 import jax
 import jax.numpy as jnp
+import multiprocessing
 import numpy as np
+import torch
 import webdataset as wds
 
 from dataclasses import dataclass, field
-from jax.sharding import NamedSharding
+from jax.sharding import Sharding
 from functools import partial
 from glob import glob
 
@@ -133,7 +135,7 @@ class DataConfig:
     frame_skip: int = 2
 
 
-def wds_collate_fn(
+def pack_batch(
     batch,
     default_pos: np.array,
     noise_mean: np.array,
@@ -142,8 +144,8 @@ def wds_collate_fn(
     action_type: str,
     context_len: int,
     pred_len: int,
-    sharding: NamedSharding,
 ):
+    batch = jax.tree.map(lambda x: jnp.asarray(x.numpy()), batch)
     vision, states, actions, masks = batch
 
     if action_type == "absolute":
@@ -151,28 +153,19 @@ def wds_collate_fn(
         actions -= default_pos
     elif action_type == "relative":
         actions = actions - states
-        # states = (states - joint_ranges[:, 0]) / (
-        #     joint_ranges[:, 1] - joint_ranges[:, 0]
-        # )
 
     noise = np.random.normal(
         loc=noise_mean,
         scale=noise_std * noise_scale,
         size=states.shape,
     )
-    noisy_states = states + noise
-
-    vision = jnp.array(vision)
-    states = jnp.array(states)
-    noisy_states = jnp.array(noisy_states)
-    actions = jnp.array(actions)
-    masks = jnp.array(masks)
 
     obs = Observation(
         img_rgb=None,
         img_feat=vision,
         img_pooled=None,
         state=states,
+        noisy_state=states + noise,
         prev_action=actions,
         mask=masks,
     )
@@ -185,14 +178,86 @@ def wds_collate_fn(
         ),
     )
 
-    obs = jax.tree.map(
-        lambda x: jax.make_array_from_process_local_data(sharding, x), obs
-    )
-    pred = jax.tree.map(
-        lambda x: jax.make_array_from_process_local_data(sharding, x), pred
-    )
-
     return obs, pred
+
+
+def _collate_fn(items):
+    """Collate the batch elements into batched numpy arrays."""
+    val = jax.tree.map(lambda x: torch.from_numpy(x), items)
+    return val
+
+
+def _worker_init_fn(worker_id: int) -> None:
+    """Tell JAX inside the worker process not to preallocate the GPU memory."""
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
+
+class TorchDataLoader:
+    def __init__(
+        self,
+        dataset: torch.utils.data.Dataset,
+        cfg: DataConfig,
+        context_len: int,
+        pred_len: int,
+        sharding: jax.sharding.Sharding | None = None,
+        seed: int = 0,
+    ):
+        """Create a PyTorch data loader."""
+        if jax.process_count() > 1:
+            raise NotImplementedError(
+                "Data loading with multiple processes is not supported."
+            )
+
+        if sharding is None:
+            raise ValueError("Sharding is required")
+
+        self._sharding = sharding
+        mp_context = None
+        if cfg.num_workers > 0:
+            mp_context = multiprocessing.get_context("spawn")
+
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+        self._data_loader = wds.WebLoader(
+            dataset,
+            batch_size=None,
+            num_workers=cfg.num_workers,
+            multiprocessing_context=mp_context,
+            persistent_workers=cfg.num_workers > 0,
+            collate_fn=_collate_fn,
+            worker_init_fn=_worker_init_fn,
+            generator=generator,
+            prefetch_factor=cfg.prefetch_factor,
+        )
+
+        self.pack_batch = partial(
+            pack_batch,
+            default_pos=np.array(cfg.default_pos),
+            noise_mean=np.array(cfg.joint_noise_mean),
+            noise_std=np.array(cfg.joint_noise_std),
+            noise_scale=cfg.joint_noise_std_scale,
+            action_type=cfg.action_type,
+            context_len=context_len,
+            pred_len=pred_len,
+        )
+
+    def __iter__(self):
+        while True:
+            data_iter = iter(self._data_loader)
+            while True:
+                try:
+                    batch = next(data_iter)
+                    batch = self.pack_batch(batch)
+                    if batch[0].state.shape[0] < self._sharding.num_devices:
+                        print("Skipping batch with batch size", batch[0].state.shape[0])
+                        continue
+                except StopIteration:
+                    break  # We've exhausted the dataset. Create a new iterator and start over.
+                yield jax.tree.map(
+                    lambda x: jax.make_array_from_process_local_data(self._sharding, x),
+                    batch,
+                )
 
 
 def random_segmenter(ctx_len: int, action_len: int):
@@ -243,17 +308,21 @@ def random_segmenter(ctx_len: int, action_len: int):
     return _fn
 
 
-def make_dataset(
-    cfg: DataConfig, num_devices: int, context_len: int, pred_len: int
-) -> wds.WebDataset:
+def _ctx_slice(x, context_len):
+    return x[:context_len]
+
+
+def _pred_slice(x, context_len, pred_len):
+    return x[: context_len + pred_len - 1]
+
+
+def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDataset:
     roots = [
-        glob(os.path.join(cfg.dataset_root, "*", "*", "shard-*.tar"))
+        glob(os.path.join(cfg.dataset_root, dataset_name, "*", "shard-*.tar"))
         for dataset_name in cfg.dataset_names
     ]
     roots = [item for sublist in roots for item in sublist]
     assert len(roots) > 0, f"No shards found in {cfg.dataset_root} {cfg.dataset_names}"
-
-    np.random.shuffle(roots)
     np.random.shuffle(roots)
 
     print("Webdataset using", len(roots), "shards")
@@ -286,10 +355,10 @@ def make_dataset(
             .repeat()
             .to_tuple("vision.npy", "state.npy", "action.npy", "mask.npy")
             .map_tuple(
-                lambda x: x[:context_len],
-                lambda x: x[:context_len],
-                lambda x: x[: context_len + pred_len - 1],
-                lambda x: x[:context_len],
+                partial(_ctx_slice, context_len=context_len),
+                partial(_ctx_slice, context_len=context_len),
+                partial(_pred_slice, context_len=context_len, pred_len=pred_len),
+                partial(_ctx_slice, context_len=context_len),
             )
             .batched(cfg.mb_size)
         )
@@ -297,28 +366,15 @@ def make_dataset(
 
 
 def make_dataloader(
-    cfg: DataConfig, context_len: int, pred_len: int, sharding: NamedSharding
+    cfg: DataConfig, context_len: int, pred_len: int, sharding: Sharding
 ) -> wds.WebLoader:
-    dataset = make_dataset(cfg, sharding.num_devices, context_len, pred_len)
-    dataloader = wds.WebLoader(
+    dataset = make_dataset(cfg, context_len, pred_len)
+    dataloader = TorchDataLoader(
         dataset,
-        batch_size=None,
-        num_workers=cfg.num_workers,
-        collate_fn=partial(
-            wds_collate_fn,
-            default_pos=np.array(cfg.default_pos),
-            noise_mean=np.array(cfg.joint_noise_mean),
-            noise_std=np.array(cfg.joint_noise_std),
-            noise_scale=cfg.joint_noise_std_scale,
-            # joint_ranges=np.array(cfg.joint_ranges),
-            action_type=cfg.action_type,
-            context_len=context_len,
-            pred_len=pred_len,
-            sharding=sharding,
-        ),
-        pin_memory=True,
-        persistent_workers=False,
-        prefetch_factor=cfg.prefetch_factor,
+        cfg,
+        context_len,
+        pred_len,
+        sharding,
+        seed=0,
     )
-    # dataloader = dataloader.unbatched().shuffle(cfg.shufflebuffer).batched(cfg.mb_size)
     return iter(dataloader)

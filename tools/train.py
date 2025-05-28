@@ -16,7 +16,7 @@ import torch
 from absl import logging
 from dataclasses import dataclass, field
 from flax import nnx, struct
-from flax.training import train_state, checkpoints
+from flax.training import train_state, checkpoints, common_utils
 from functools import partial
 from jax import random
 from jax.sharding import PartitionSpec as P
@@ -177,11 +177,9 @@ def train(cfg: TrainConfig):
     rngs = nnx.Rngs(init_rng)
 
     # Setup training components
-    # mesh = make_mesh(cfg.distributed)
-    devices = np.array(jax.devices())
     mesh = jax.make_mesh((cfg.dist.num_devices,), ("data",))
-    data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    data_sharding = jax.sharding.NamedSharding(mesh, P("data"))
+    replicated_sharding = jax.sharding.NamedSharding(mesh, P())
 
     dataloader = make_dataloader(
         cfg.data,
