@@ -1,6 +1,6 @@
 """Meters."""
 
-from typing import List, Dict
+from typing import List, Dict, Any
 
 import os
 import wandb
@@ -41,10 +41,10 @@ def init_wandb(cfg: "TrainConfig"):
     wandb.init(
         dir=cfg.logdir,
         name=name,
-        project=cfg.logging.wandb.project,
-        entity=cfg.logging.wandb.entity,
+        project=cfg.log.wandb.project,
+        entity=cfg.log.wandb.entity,
         config=asdict(cfg),
-        mode=cfg.logging.wandb.mode,
+        mode=cfg.log.wandb.mode,
     )
 
 
@@ -196,7 +196,6 @@ class IterTrainMeter(object):
 
         self.loss_names = loss_names
         self.losses = {name: ScalarMeter(log_period) for name in loss_names}
-        self.losses_total = {name: 0.0 for name in loss_names}
 
         self.lr = None
         self.batch_size = 0
@@ -211,7 +210,6 @@ class IterTrainMeter(object):
 
         for name in self.losses:
             self.losses[name].reset()
-        self.losses_total = {name: 0.0 for name in self.losses}
         self.timer.reset()
 
         self.lr = None
@@ -223,23 +221,18 @@ class IterTrainMeter(object):
     def iter_toc(self):
         self.iter_timer.toc()
 
-    def update_stats(
+    def update(
         self,
-        loss: Dict[str, float],
-        batch_size: int,
-        lr: float,
-        mb_size: int,
-        prefetched_size: int,
-        grad_norm: float,
+        metrics: Dict[str, Any],
     ):
-        for name, value in loss.items():
+        for name, value in metrics["loss"].items():
             self.losses[name].add_value(value)
-            self.losses_total[name] += value * mb_size
-        self.lr = lr
-        self.num_samples += mb_size
-        self.prefetched_size = prefetched_size
-        self.batch_size = batch_size
-        self.grad_norm = grad_norm
+        self.lr = metrics["lr"]
+        self.num_samples += metrics["batch_size"]
+        self.prefetched_size = 0
+        self.batch_size = metrics["batch_size"]
+        self.grad_norm = metrics["grad_norm"]
+        self.param_norm = metrics["param_norm"]
 
     def get_iter_stats(self, cur_iter: int):
         cur_iter_total = cur_iter + 1
@@ -291,5 +284,4 @@ def make_meter(cfg: LoggingConfig, total_iter: int):
     return IterTrainMeter(
         cfg.losses,
         total_iter,
-        cfg.save_freq,
     )

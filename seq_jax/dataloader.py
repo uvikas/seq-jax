@@ -21,16 +21,14 @@ from seq_jax.policy import Observation, Prediction
 class DataConfig:
     dataset_type: str = "wds"
     chunked: bool = False
-    mb_size: int = 32
-    shufflebuffer: int = 8192
-    shardshuffle: int = 1000
+    mb_size: int = 256
+    shufflebuffer: int = 1024
+    shardshuffle: int = 100
     num_workers: int = 4
     prefetch_factor: int | None = None
 
-    dataset_root: str = "/path/to/wds/"
-    dataset_names: List[str] = field(
-        default_factory=lambda: ["fold-h16a1fs2-vitb-5min"]
-    )
+    dataset_root: str = "/path/to/wds/fold-h16a1fs2-vitb-5min/"
+    dataset_names: List[str] = field(default_factory=lambda: ["*"])
     dtype: str = "float32"
     vision_format: str = "mp4"
 
@@ -187,9 +185,6 @@ def wds_collate_fn(
         ),
     )
 
-    print("sharding", sharding)
-    print(util.array_tree_to_info(obs))
-
     obs = jax.tree.map(
         lambda x: jax.make_array_from_process_local_data(sharding, x), obs
     )
@@ -248,9 +243,11 @@ def random_segmenter(ctx_len: int, action_len: int):
     return _fn
 
 
-def make_dataset(cfg: DataConfig, num_devices: int) -> wds.WebDataset:
+def make_dataset(
+    cfg: DataConfig, num_devices: int, context_len: int, pred_len: int
+) -> wds.WebDataset:
     roots = [
-        glob(os.path.join(cfg.dataset_root, dataset_name, "*", "*", "shard-*.tar"))
+        glob(os.path.join(cfg.dataset_root, "*", "*", "shard-*.tar"))
         for dataset_name in cfg.dataset_names
     ]
     roots = [item for sublist in roots for item in sublist]
@@ -288,6 +285,12 @@ def make_dataset(cfg: DataConfig, num_devices: int) -> wds.WebDataset:
             .decode("torch")
             .repeat()
             .to_tuple("vision.npy", "state.npy", "action.npy", "mask.npy")
+            .map_tuple(
+                lambda x: x[:context_len],
+                lambda x: x[:context_len],
+                lambda x: x[: context_len + pred_len - 1],
+                lambda x: x[:context_len],
+            )
             .batched(cfg.mb_size)
         )
     return dataset
@@ -296,7 +299,7 @@ def make_dataset(cfg: DataConfig, num_devices: int) -> wds.WebDataset:
 def make_dataloader(
     cfg: DataConfig, context_len: int, pred_len: int, sharding: NamedSharding
 ) -> wds.WebLoader:
-    dataset = make_dataset(cfg, sharding.num_devices)
+    dataset = make_dataset(cfg, sharding.num_devices, context_len, pred_len)
     dataloader = wds.WebLoader(
         dataset,
         batch_size=None,

@@ -143,14 +143,21 @@ class TransformerConcatActor(nnx.Module):
             deterministic=deterministic,
             rngs=rngs,
         )
-        print("img_pooled", [im.shape for im in img_pooled])
         policy_in = policy_in.replace(img_pooled=img_pooled)
         pred_act = self.policy(
             policy_in, attn_mask, deterministic=deterministic, rngs=rngs
         )
 
         loss = jnp.mean(jnp.square(pred_act.action - pred.action))
-        return loss
+        loss_dict = {
+            "action_loss": loss,
+            "im_head_loss": jnp.array([0.0]),
+            "im_left_loss": jnp.array([0.0]),
+            "im_right_loss": jnp.array([0.0]),
+            "state_loss": jnp.array([0.0]),
+            "total_loss": loss,
+        }
+        return loss, loss_dict
 
     def pool_feats(
         self, feat: jnp.ndarray, *, deterministic: bool, rngs: nnx.Rngs

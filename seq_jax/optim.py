@@ -23,12 +23,15 @@ def make_optimizer(
     cfg: OptimConfig, lr_scheduler: optax.Schedule
 ) -> optax.GradientTransformation:
     """Create optimizer."""
-    return optax.adamw(
-        learning_rate=lr_scheduler,
-        weight_decay=cfg.weight_decay,
-        b1=cfg.betas[0],
-        b2=cfg.betas[1],
-        eps=1e-8,
+    return optax.chain(
+        optax.clip_by_global_norm(cfg.clip_norm),
+        optax.adamw(
+            learning_rate=lr_scheduler,
+            weight_decay=cfg.weight_decay,
+            b1=cfg.betas[0],
+            b2=cfg.betas[1],
+            eps=1e-8,
+        ),
     )
 
 

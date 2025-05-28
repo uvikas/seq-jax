@@ -11,6 +11,7 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import termcolor
+import torch
 
 from absl import logging
 from dataclasses import dataclass, field
@@ -18,8 +19,6 @@ from flax import nnx, struct
 from flax.training import train_state, checkpoints
 from functools import partial
 from jax import random
-from jax.experimental.pjit import pjit
-from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 from omegaconf import OmegaConf
 
@@ -41,9 +40,9 @@ class TrainConfig:
     data: DataConfig = field(default_factory=DataConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    distributed: DistributedConfig = field(default_factory=DistributedConfig)
+    dist: DistributedConfig = field(default_factory=DistributedConfig)
     env: EnvConfig = field(default_factory=EnvConfig)
-    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    log: LoggingConfig = field(default_factory=LoggingConfig)
 
     @property
     def trainable_filter(self):
@@ -115,26 +114,23 @@ def save_checkpoint(state: TrainState, outdir: str, step: int):
 def train_step(
     state: TrainState,
     data: jax.Array,
+    step_rng: jax.random.PRNGKey,
+    lr_scheduler: optax.Schedule,
 ):
     """Perform a training step."""
-    print("in train step", type(state), type(data))
     model = nnx.merge(state.model_def, state.params)
     model.train()
-
-    rng = jax.random.PRNGKey(0)
+    rng = nnx.Rngs(step_rng)
 
     def loss_fn(model: nnx.Module, rngs: nnx.Rngs, obs: Observation, pred: Prediction):
-
-        loss = model.compute_loss(obs, pred, deterministic=False, rngs=rngs)
-        return loss
+        loss, loss_dict = model.compute_loss(obs, pred, deterministic=False, rngs=rngs)
+        return loss, loss_dict
 
     # Compute loss and gradients
-    print("train step", util.array_tree_to_info(data), sep="\n")
-
     obs, pred = data
     diff_state = nnx.DiffState(0, cfg.trainable_filter)
-    grad_fn = nnx.value_and_grad(loss_fn, argnums=diff_state)
-    loss, grads = grad_fn(model, rng, obs, pred)
+    grad_fn = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)
+    (loss, loss_dict), grads = grad_fn(model, rng, obs, pred)
 
     params = state.params.filter(cfg.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -142,15 +138,31 @@ def train_step(
     nnx.update(model, new_params)
     new_params = nnx.state(model)
 
-    new_state = dataclasses.replace(
-        state, step=state.step + 1, params=new_params, opt_state=new_opt_state
+    clipped_grads, _ = optax.clip_by_global_norm(cfg.optim.clip_norm).update(
+        grads, None
     )
+
     metrics = {
-        "loss": jnp.array([loss]),
-        "grad_norm": jnp.array([optax.global_norm(grads)]),
+        "loss": loss_dict,
+        "grad_norm": jnp.array([optax.global_norm(clipped_grads)]),
         "step": jnp.array([state.step]),
-        # "params": optax.global_norm(new_params),
+        "param_norm": optax.global_norm(new_params),
+        "lr": lr_scheduler(state.step),
+        "batch_size": jnp.array([obs.state.shape[0]]),
     }
+
+    new_state = dataclasses.replace(
+        state,
+        step=state.step + 1,
+        params=new_params,
+        opt_state=new_opt_state,
+        ema_params=jax.tree.map(
+            lambda old, new: (1 - state.ema_alpha) * old + state.ema_alpha * new,
+            state.ema_params,
+            new_params,
+        ),
+    )
+
     return new_state, metrics
 
 
@@ -160,13 +172,14 @@ def train(cfg: TrainConfig):
     print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
     print(f"Jax devices: {jax.device_count()}")
 
-    rng = jax.random.PRNGKey(cfg.seed)
-    rngs = nnx.Rngs(rng)
+    root_rng = jax.random.PRNGKey(cfg.seed)
+    init_rng, train_rng = jax.random.split(root_rng)
+    rngs = nnx.Rngs(init_rng)
 
     # Setup training components
     # mesh = make_mesh(cfg.distributed)
     devices = np.array(jax.devices())
-    mesh = Mesh(devices, ("data",))
+    mesh = jax.make_mesh((cfg.dist.num_devices,), ("data",))
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
@@ -177,34 +190,48 @@ def train(cfg: TrainConfig):
         data_sharding,
     )
     lr_scheduler = make_lr_scheduler(cfg.optim)
-    meter = make_meter(cfg.logging, cfg.optim.num_steps)
+    meter = make_meter(cfg.log, cfg.optim.num_steps)
 
     state = make_train_state(cfg, lr_scheduler, mesh, rngs=rngs)
     ptrain_step = jax.jit(
-        train_step,
-        in_shardings=(replicated_sharding, data_sharding),
+        partial(
+            train_step,
+            lr_scheduler=lr_scheduler,
+        ),
+        in_shardings=(replicated_sharding, data_sharding, replicated_sharding),
         out_shardings=(replicated_sharding, replicated_sharding),
         # donate_argnums=(1,),
     )
 
     # Training loop
     for step in range(state.step, cfg.optim.num_steps):
-        # Get next batch
-        data = next(dataloader)
+        meter.reset()
+        meter.iter_tic()
 
-        # Perform training step
-        print("ar_mask", data[0].mask.shape)
-        print(util.array_tree_to_info(data))
+        step_rng = jax.random.fold_in(train_rng, step)
 
-        with set_mesh(mesh):
-            state, info = ptrain_step(state, data)
+        with meter.timer("io"):
+            # Get next batch
+            data = next(dataloader)
 
-        print(info)
-        print(info["loss"].global_shards)
-        print("done")
-        # print(metrics)
+        with meter.timer("fwd_bwd"):
+            # Perform training step
+            with set_mesh(mesh):
+                state, metrics = ptrain_step(state, data, step_rng)
+
+        metrics = {
+            key: value.item() if isinstance(value, jnp.ndarray) else value
+            for key, value in metrics.items()
+        }
+        metrics["loss"] = {key: value.item() for key, value in metrics["loss"].items()}
+
+        # Log metrics
+        meter.iter_toc()
+        meter.update(metrics)
+        meter.log_iter_stats(step)
+
         # Save a checkpoint
-        if (step + 1) % cfg.logging.save_freq == 0:
+        if (step + 1) % cfg.log.save_freq == 0:
             save_checkpoint(state, cfg.logdir, step)
 
 

@@ -495,7 +495,7 @@ class TransformerConcatPolicy(nnx.Module):
     ) -> Prediction:
         # (B, T, 3*C + D + D)
 
-        print("policy", [im.shape for im in obs.img_pooled], obs.state.shape)
+        # print("policy", [im.shape for im in obs.img_pooled], obs.state.shape)
         x = jnp.concatenate(
             obs.img_pooled
             + [
