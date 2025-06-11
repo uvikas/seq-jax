@@ -123,7 +123,7 @@ def train_step(
     rng = nnx.Rngs(step_rng)
 
     def loss_fn(model: nnx.Module, rngs: nnx.Rngs, obs: Observation, pred: Prediction):
-        loss, loss_dict = model.compute_loss(obs, pred, deterministic=False, rngs=rngs)
+        loss, loss_dict = model.compute_loss(obs, pred, rngs=rngs)
         return loss, loss_dict
 
     # Compute loss and gradients

@@ -14,6 +14,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python tools/train.py dist.num_devices=8 da
 ## Todo
 - [ ] Checkpoint
 - [ ] Sanity check outputs from pretrained model
-- [ ] Sanity check ddp
 - [ ] Multi-host, multi-device
 - [ ] Dataloading
+
+## Perf Tuning
+Currently, this code prefers not to relax precision to faithfully reproduce torch outputs. These are things to revisit at for potential speedups:
+* `nnx.BatchNorm` `use_fast_variance=False`
+* `jax.config.update("jax_default_matmul_precision", "float32")`
+* `jax.lax.Precision.HIGHEST`

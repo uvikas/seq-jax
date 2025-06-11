@@ -52,7 +52,7 @@ class Prediction:
 ################################################################################
 
 
-def get_1d_sincos_pos_embed(embed_dim: int, length: int) -> jax.Array:
+def get_1d_sincos_pos_embed(embed_dim: int, length: int) -> jnp.ndarray:
     """
     Args:
       embed_dim: must be even. Final embedding dim = embed_dim
@@ -126,7 +126,7 @@ class MLP(nnx.Module):
             # Update the Sequential layers
             self.net.layers[-1] = new_last_layer
 
-    def __call__(self, x, *, deterministic: bool, rngs: nnx.Rngs):
+    def __call__(self, x, *, rngs: nnx.Rngs):
         return self.net(x)
 
 
@@ -182,6 +182,19 @@ class QueryPool(nnx.Module):
             ),
         )
 
+        self.proj_1 = nnx.Linear(
+            in_features=input_dim * num_query,
+            out_features=output_dim * 4,
+            rngs=rngs,
+        )
+        self.proj_2 = nnx.Linear(
+            in_features=output_dim * 4,
+            out_features=output_dim,
+            rngs=rngs,
+        )
+        self.act = partial(nnx.gelu, approximate=False)
+        self.proj_drop = nnx.Dropout(rate=drop)
+
         # MLP head
         self.mlp = MLP(
             input_dim * num_query,
@@ -190,9 +203,7 @@ class QueryPool(nnx.Module):
             rngs=rngs,
         )
 
-    def __call__(
-        self, im_emb: jnp.ndarray, *, deterministic: bool, rngs: nnx.Rngs
-    ) -> jnp.ndarray:
+    def __call__(self, im_emb: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
         """
         im_emb: [batch, T, N, C]  (C == input_dim)
         returns: [batch, T, output_dim]
@@ -200,7 +211,6 @@ class QueryPool(nnx.Module):
         b, T, N, C = im_emb.shape
         assert C == self.input_dim, f"Expected C={self.input_dim}, got {C}"
 
-        # flatten batch and time dims
         B = b * T
         x = im_emb.reshape((B, N, C))
 
@@ -225,8 +235,10 @@ class QueryPool(nnx.Module):
         out = out.reshape((b, T, self.num_query * C))
 
         # MLP head + dropout
-        out = self.mlp(out, deterministic=deterministic, rngs=rngs)
-        out = nnx.Dropout(rate=self.drop)(out, deterministic=deterministic)
+        out = self.proj_1(out)
+        out = self.act(out)
+        out = self.proj_2(out)
+        out = self.proj_drop(out)
 
         return out
 
@@ -253,44 +265,40 @@ class MLPBlock(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
-        # Store static (non‑Param) attributes directly
         self.w_in = w_in
         self.mlp_d = mlp_d
         self.dropout = dropout
 
-        # Create submodules (they register params in self)
-        self.dense1 = nnx.Linear(
+        self.linear_1 = nnx.Linear(
             in_features=w_in,
             out_features=mlp_d,
             rngs=rngs,
             kernel_init=nnx.initializers.xavier_uniform(),
             bias_init=nnx.initializers.normal(stddev=1e-6),
         )
-        self.dense2 = nnx.Linear(
+        self.linear_2 = nnx.Linear(
             in_features=mlp_d,
             out_features=w_in,
             rngs=rngs,
             kernel_init=nnx.initializers.xavier_uniform(),
             bias_init=nnx.initializers.normal(stddev=1e-6),
         )
+        self.af = partial(nnx.gelu, approximate=True)
 
-        self.dropout1 = nnx.Dropout(rate=dropout)
-        self.dropout2 = nnx.Dropout(rate=dropout)
+        self.dropout_1 = nnx.Dropout(rate=dropout)
+        self.dropout_2 = nnx.Dropout(rate=dropout)
 
     def __call__(
         self,
         x: jnp.ndarray,
         *,
-        deterministic: bool,
         rngs: nnx.Rngs,
     ) -> jnp.ndarray:
-        # First linear → dropout → GELU
-        x = self.dense1(x)
-        x = self.dropout1(x, deterministic=deterministic, rngs=rngs)
-        x = nnx.gelu(x, approximate=True)
-        # Second linear → dropout
-        x = self.dense2(x)
-        x = self.dropout2(x, deterministic=deterministic, rngs=rngs)
+        x = self.linear_1(x)
+        x = self.dropout_1(x, rngs=rngs)
+        x = self.af(x)
+        x = self.linear_2(x)
+        x = self.dropout_2(x, rngs=rngs)
         return x
 
 
@@ -308,6 +316,7 @@ class TransformerEncoderBlock(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
+        self.hidden_d = hidden_d
         self.ln_1 = layernorm(hidden_d, rngs=rngs)
         self.attention = nnx.MultiHeadAttention(
             num_heads=n_heads,
@@ -315,8 +324,8 @@ class TransformerEncoderBlock(nnx.Module):
             qkv_features=hidden_d,
             out_features=hidden_d,
             dropout_rate=attn_dropout,
-            rngs=rngs,
             decode=False,
+            rngs=rngs,
         )
         self.ln_2 = layernorm(hidden_d, rngs=rngs)
         self.mlp_block = MLPBlock(
@@ -331,7 +340,6 @@ class TransformerEncoderBlock(nnx.Module):
         x: jax.Array,
         attn_mask: jax.Array,
         *,
-        deterministic: bool,
         rngs: nnx.Rngs,
     ) -> jax.Array:
         x_p = self.ln_1(x)
@@ -339,12 +347,12 @@ class TransformerEncoderBlock(nnx.Module):
             x_p,
             x_p,
             x_p,
-            mask=attn_mask,
-            deterministic=deterministic,
+            mask=~attn_mask,
             rngs=rngs,
         )
+
         x = x + x_p
-        x_p = self.mlp_block(self.ln_2(x), deterministic=deterministic, rngs=rngs)
+        x_p = self.mlp_block(self.ln_2(x), rngs=rngs)
         return x + x_p
 
 
@@ -386,12 +394,12 @@ class TransformerEncoder(nnx.Module):
         x: jax.Array,
         attn_mask: jax.Array,
         *,
-        deterministic: bool,
         rngs: nnx.Rngs,
     ) -> jax.Array:
         # Apply each encoder block in sequence
         for block in self.blocks:
-            x = block(x, attn_mask=attn_mask, deterministic=deterministic, rngs=rngs)
+            x = block(x, attn_mask=attn_mask, rngs=rngs)
+
         # Apply final layer norm if defined
         if hasattr(self, "ln"):
             x = self.ln(x)
@@ -411,8 +419,8 @@ class TransformerConcatPolicyConfig:
     causal: bool = True
     in_proj_hidden_sizes: List[int] = field(default_factory=lambda: [])
     num_img_query: int = 16
-    embed_dim: int = 384
-    num_blocks: int = 6
+    embed_dim: int = 768
+    num_blocks: int = 16
     num_heads: int = 8
     mlp_ratio: float = 2.0
     attn_dropout: float = 0.0
@@ -446,15 +454,25 @@ class TransformerConcatPolicy(nnx.Module):
         # Must be static tuple
         self.split_output = tuple(np.array(out_dims).cumsum())
 
-        self.in_proj = MLP(
+        self.in_proj1 = MLP(
             self.input_dim,
-            cfg.embed_dim,
-            [self.input_dim // 2],
+            self.input_dim // 2,
+            cfg.in_proj_hidden_sizes,
             stable_init=False,
             rngs=rngs,
         )
+        self.in_proj2 = MLP(
+            self.input_dim // 2,
+            cfg.embed_dim,
+            cfg.in_proj_hidden_sizes,
+            stable_init=False,
+            rngs=rngs,
+        )
+        self.act = partial(nnx.gelu, approximate=False)
 
-        self.pos_embed = get_1d_sincos_pos_embed(cfg.embed_dim, context_len)
+        self.pos_embed = nnx.Variable(
+            jnp.expand_dims(get_1d_sincos_pos_embed(cfg.embed_dim, context_len), axis=0)
+        )
 
         self.encoder = TransformerEncoder(
             cfg.num_blocks,
@@ -489,27 +507,19 @@ class TransformerConcatPolicy(nnx.Module):
 
     def __call__(
         self,
-        obs: Observation,
+        obs: jnp.array,
         attn_mask: jnp.ndarray,
         *,
-        deterministic: bool,
         rngs: nnx.Rngs,
     ) -> Prediction:
         # (B, T, 3*C + D + D)
 
-        # print("policy", [im.shape for im in obs.img_pooled], obs.state.shape)
-        x = jnp.concatenate(
-            obs.img_pooled
-            + [
-                obs.state,
-                # obs.prev_action,
-            ],
-            axis=-1,
-        )
-
-        x = self.in_proj(x, deterministic=deterministic, rngs=rngs)
+        x = self.in_proj1(obs, rngs=rngs)
+        x = self.act(x)
+        x = self.in_proj2(x, rngs=rngs)
+        x = x.transpose(1, 0, 2)
         x = x + self.pos_embed
-        x = self.encoder(x, attn_mask, deterministic=deterministic, rngs=rngs)
+        x = self.encoder(x, attn_mask, rngs=rngs)
 
         if self.multihead_proj:
             img_pooled, state, action = [], [], []
@@ -524,7 +534,7 @@ class TransformerConcatPolicy(nnx.Module):
             action = jnp.stack(action, axis=1)
             return Prediction(img_pooled=img_pooled, state=state, action=action)
         else:
-            x = self.out_proj(x, deterministic=deterministic, rngs=rngs)
+            x = self.out_proj(x, rngs=rngs)
             splits = jnp.split(x, self.split_output, axis=-1)
             img_pooled, state, action = splits[:3], splits[3], splits[4]
             return Prediction(
