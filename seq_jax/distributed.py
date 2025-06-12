@@ -1,9 +1,12 @@
+import os
+
+import atexit
 import contextlib
 import jax
-import numpy as np
+import shutil
+import tempfile
 
-from dataclasses import dataclass
-from jax.sharding import Mesh
+from dataclasses import dataclass, asdict
 
 
 class _MeshState:
@@ -22,15 +25,30 @@ class EnvConfig:
     OMP_NUM_THREADS: str = "1"
     NCCL_DEBUG: str = "WARN"
 
-    # Only enable for brc
-    # NCCL_P2P_DISABLE: str = "1"
 
+def setup_env(cfg: EnvConfig):
+    env_vars = asdict(cfg)
 
-def make_mesh(cfg: DistributedConfig):
-    """1d data parallel sharding"""
-    devices = np.array(jax.devices())
-    mesh = Mesh(devices, ("data",))
-    return mesh
+    # Triton cache in tmpfs
+    triton_cache_dir = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, triton_cache_dir, ignore_errors=True)
+    env_vars["TRITON_CACHE_DIR"] = triton_cache_dir
+
+    # Set env vars
+    for name, value in env_vars.items():
+        if os.environ.get(name) != str(value):
+            os.environ[name] = str(value)
+            print(f"WARNING: Setting {name} to {value}")
+
+    # JAX config
+    jax.config.update("jax_enable_x64", False)
+    jax.config.update("jax_default_matmul_precision", "float32")
+
+    # See https://docs.jax.dev/en/latest/xla_flags.html
+    os.environ.setdefault(
+        "XLA_FLAGS",
+        "--xla_gpu_enable_triton_gemm=true ",
+    )
 
 
 @contextlib.contextmanager

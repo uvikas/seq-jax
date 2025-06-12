@@ -12,8 +12,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python tools/train.py dist.num_devices=8 da
 ```
 
 ## Todo
-- [ ] Checkpoint
-- [ ] Sanity check outputs from pretrained model
 - [ ] Multi-host, multi-device
 - [ ] Dataloading
 

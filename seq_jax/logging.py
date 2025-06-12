@@ -23,6 +23,7 @@ class WandbConfig:
 @dataclass
 class LoggingConfig:
     save_freq: int = 1000
+    log_freq: int = 1
     losses: List[str] = field(
         default_factory=lambda: [
             "action_loss",
@@ -38,14 +39,27 @@ class LoggingConfig:
 
 def init_wandb(cfg: "TrainConfig"):
     name = os.path.basename(os.path.normpath(cfg.logdir))
-    wandb.init(
-        dir=cfg.logdir,
-        name=name,
-        project=cfg.log.wandb.project,
-        entity=cfg.log.wandb.entity,
-        config=asdict(cfg),
-        mode=cfg.log.wandb.mode,
-    )
+    run_id_file = os.path.join(cfg.logdir, "wandb_id.txt")
+
+    if cfg.resume:
+        with open(run_id_file, "r") as f:
+            run_id = f.read().strip()
+        wandb.init(
+            id=run_id,
+            resume="must",
+            project=cfg.log.wandb.project,
+        )
+    else:
+        wandb.init(
+            dir=cfg.logdir,
+            name=name,
+            project=cfg.log.wandb.project,
+            entity=cfg.log.wandb.entity,
+            config=asdict(cfg),
+            mode=cfg.log.wandb.mode,
+        )
+        with open(run_id_file, "w") as f:
+            f.write(wandb.run.id)
 
 
 def time_string(seconds):
@@ -246,6 +260,7 @@ class IterTrainMeter(object):
             "prefetched": self.prefetched_size,
             "batch_sz": self.batch_size,
             "grad_norm": self.grad_norm,
+            "param_norm": self.param_norm,
         }
 
         loss_stats = {
@@ -271,12 +286,14 @@ class IterTrainMeter(object):
                 "train/iter": cur_iter + 1,
                 "train/lr": stats["lr"],
                 "train/grad_norm": stats["grad_norm"],
+                "train/param_norm": stats["param_norm"],
             }
             | {f"train/iter_{name}": loss_stats[name] for name in self.loss_names}
             | {
                 f"latency/iter_{name}": latency_stats[name]
                 for name in latency_stats.keys()
-            }
+            },
+            step=cur_iter,
         )
 
 
@@ -284,4 +301,5 @@ def make_meter(cfg: LoggingConfig, total_iter: int):
     return IterTrainMeter(
         cfg.losses,
         total_iter,
+        log_period=cfg.log_freq,
     )

@@ -16,14 +16,12 @@ import torch
 from absl import logging
 from dataclasses import dataclass, field
 from flax import nnx, struct
-from flax.training import train_state, checkpoints, common_utils
 from functools import partial
-from jax import random
 from jax.sharding import PartitionSpec as P
 from omegaconf import OmegaConf
 
 from seq_jax.dataloader import DataConfig, make_dataloader
-from seq_jax.distributed import DistributedConfig, EnvConfig, make_mesh, set_mesh
+from seq_jax.distributed import DistributedConfig, EnvConfig, set_mesh, setup_env
 from seq_jax.logging import LoggingConfig, make_meter, init_wandb
 from seq_jax.actor import ModelConfig, make_model, Observation, Prediction
 from seq_jax.optim import OptimConfig, make_optimizer, make_lr_scheduler
@@ -36,6 +34,7 @@ class TrainConfig:
     logdir: str = "/tmp/bc/"
     seed: int = 0
     platform: str = "gpu"
+    resume: bool = False
 
     data: DataConfig = field(default_factory=DataConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
@@ -101,14 +100,49 @@ def make_train_state(
     return state
 
 
-def save_checkpoint(state: TrainState, outdir: str, step: int):
-    step = int(state.step)
-    logging.info(f"Saving checkpoint at step {step}")
+def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManager:
+    os.makedirs(logdir, exist_ok=True)
+    mngr = ocp.CheckpointManager(
+        os.path.abspath(logdir),
+        item_handlers={
+            "train_state": ocp.PyTreeCheckpointHandler(),
+            "params": ocp.PyTreeCheckpointHandler(),
+        },
+        options=ocp.CheckpointManagerOptions(
+            create=True,
+            enable_async_checkpointing=True,
+            async_options=ocp.AsyncOptions(
+                timeout_secs=7200,
+                create_directories_asynchronously=True,
+            ),
+            enable_background_delete=True,
+        ),
+    )
 
-    # replicated_state = jax.tree_util.tree_map(
-    #     ocp.utils.fully_replicated_host_array_to_global_array, state
-    # )
-    # checkpoints.save_checkpoint_multiprocess(outdir, replicated_state, step, keep=3)
+    if not resume and not (tuple(mngr.all_steps()) in [(), (0,)]):
+        raise ValueError(
+            f"Log directory {logdir} already exists and contains checkpoints. "
+            "Set resume=True to resume training from the last checkpoint."
+        )
+
+    return mngr
+
+
+def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState:
+    if tuple(ckptr.all_steps()) in [(), (0,)]:
+        # No checkpoints saved, so we can't restore
+        return state
+
+    restored = ckptr.restore(step=None, items={"train_state": state})
+    restored_state = restored["train_state"]
+    print(f"Restored training state from checkpoint at step {restored_state.step}")
+    return restored_state
+
+
+def save_state(ckptr: ocp.CheckpointManager, state: TrainState, step: int):
+    step = int(state.step)
+    print(f"Saving checkpoint at step {step} to {ckptr.directory}")
+    ckptr.save(step, items={"train_state": state})
 
 
 def train_step(
@@ -116,6 +150,7 @@ def train_step(
     data: jax.Array,
     step_rng: jax.random.PRNGKey,
     lr_scheduler: optax.Schedule,
+    cfg: TrainConfig,
 ):
     """Perform a training step."""
     model = nnx.merge(state.model_def, state.params)
@@ -142,13 +177,20 @@ def train_step(
         grads, None
     )
 
+    ema_params = jax.tree.map(
+        lambda old, new: old + state.ema_alpha * (new - old),
+        state.ema_params,
+        new_params,
+    )
+
+    # Create metrics with minimal array allocations
     metrics = {
         "loss": loss_dict,
         "grad_norm": jnp.array([optax.global_norm(clipped_grads)]),
         "step": jnp.array([state.step]),
         "param_norm": optax.global_norm(new_params),
         "lr": lr_scheduler(state.step),
-        "batch_size": jnp.array([obs.state.shape[0]]),
+        "batch_size": obs.state.shape[0],
     }
 
     new_state = dataclasses.replace(
@@ -156,11 +198,7 @@ def train_step(
         step=state.step + 1,
         params=new_params,
         opt_state=new_opt_state,
-        ema_params=jax.tree.map(
-            lambda old, new: (1 - state.ema_alpha) * old + state.ema_alpha * new,
-            state.ema_params,
-            new_params,
-        ),
+        ema_params=ema_params,
     )
 
     return new_state, metrics
@@ -168,6 +206,7 @@ def train_step(
 
 def train(cfg: TrainConfig):
     init_wandb(cfg)
+    setup_env(cfg.env)
 
     print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
     print(f"Jax devices: {jax.device_count()}")
@@ -180,7 +219,6 @@ def train(cfg: TrainConfig):
     mesh = jax.make_mesh((cfg.dist.num_devices,), ("data",))
     data_sharding = jax.sharding.NamedSharding(mesh, P("data"))
     replicated_sharding = jax.sharding.NamedSharding(mesh, P())
-
     dataloader = make_dataloader(
         cfg.data,
         cfg.model.context_len,
@@ -189,24 +227,36 @@ def train(cfg: TrainConfig):
     )
     lr_scheduler = make_lr_scheduler(cfg.optim)
     meter = make_meter(cfg.log, cfg.optim.num_steps)
+    ckptr = make_checkpointer(cfg.logdir, resume=cfg.resume)
 
+    # Create train state
     state = make_train_state(cfg, lr_scheduler, mesh, rngs=rngs)
+    if cfg.resume:
+        state = restore_state(ckptr, state)
+
     ptrain_step = jax.jit(
         partial(
             train_step,
             lr_scheduler=lr_scheduler,
+            cfg=cfg,
         ),
         in_shardings=(replicated_sharding, data_sharding, replicated_sharding),
         out_shardings=(replicated_sharding, replicated_sharding),
-        # donate_argnums=(1,),
+        # donate_argnums=(0, 1),
     )
+
+    # Pre-generate RNG keys
+    step_rngs = jax.random.split(train_rng, cfg.optim.num_steps)
+
+    print("Warming up JIT compilation...")
+    dummy_data = next(dataloader)
+    ptrain_step(state, dummy_data, step_rngs[0])
+    print("JIT compilation complete.")
 
     # Training loop
     for step in range(state.step, cfg.optim.num_steps):
         meter.reset()
         meter.iter_tic()
-
-        step_rng = jax.random.fold_in(train_rng, step)
 
         with meter.timer("io"):
             # Get next batch
@@ -215,7 +265,7 @@ def train(cfg: TrainConfig):
         with meter.timer("fwd_bwd"):
             # Perform training step
             with set_mesh(mesh):
-                state, metrics = ptrain_step(state, data, step_rng)
+                state, metrics = ptrain_step(state, data, step_rngs[step])
 
         metrics = {
             key: value.item() if isinstance(value, jnp.ndarray) else value
@@ -229,11 +279,11 @@ def train(cfg: TrainConfig):
         meter.log_iter_stats(step)
 
         # Save a checkpoint
-        if (step + 1) % cfg.log.save_freq == 0:
-            save_checkpoint(state, cfg.logdir, step)
+        if (step + 1) % cfg.log.save_freq == 0 or step == cfg.optim.num_steps - 1:
+            save_state(ckptr, state, step)
 
 
-def get_cfg() -> TrainConfig:
+def read_cfg() -> TrainConfig:
     cli_args = OmegaConf.from_cli()
     default_cfg = OmegaConf.structured(TrainConfig())
     cfg = OmegaConf.merge(default_cfg, cli_args)
@@ -249,5 +299,5 @@ def get_cfg() -> TrainConfig:
 
 
 if __name__ == "__main__":
-    cfg: TrainConfig = get_cfg()
+    cfg: TrainConfig = read_cfg()
     train(cfg)
