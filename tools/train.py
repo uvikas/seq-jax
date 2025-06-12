@@ -11,6 +11,7 @@ import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import termcolor
+import time
 import torch
 
 from absl import logging
@@ -56,7 +57,7 @@ class TrainConfig:
 class TrainState:
     step: int
     params: nnx.State
-    model_def: nnx.GraphDef
+    model_def: nnx.GraphDef = struct.field(pytree_node=False)
     tx: optax.GradientTransformation = struct.field(pytree_node=False)
     opt_state: optax.OptState
     ema_alpha: float
@@ -249,9 +250,10 @@ def train(cfg: TrainConfig):
     step_rngs = jax.random.split(train_rng, cfg.optim.num_steps)
 
     print("Warming up JIT compilation...")
+    t = time.perf_counter()
     dummy_data = next(dataloader)
     ptrain_step(state, dummy_data, step_rngs[0])
-    print("JIT compilation complete.")
+    print(f"JIT compilation complete in {time.perf_counter() - t:.2f}s")
 
     # Training loop
     for step in range(state.step, cfg.optim.num_steps):
