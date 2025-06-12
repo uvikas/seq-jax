@@ -1,4 +1,4 @@
-"""Check outputs from full model (vision encoder + action head)"""
+"""Load full model (vitb + action head) and compare outputs between torch and jax"""
 
 import os
 import jax
@@ -74,24 +74,7 @@ graphdef, state = nnx.split(jax_model)
 ckptr = ocp.PyTreeCheckpointer()
 restored_state = ckptr.restore("/tmp/jax_model/pure/", item=nnx.state(jax_model))
 jax_model = nnx.merge(graphdef, restored_state)
-
-# obs = seq_jax.policy.Observation(
-#     img_rgb=[
-#         jax.random.uniform(
-#             key,
-#             shape=(batch_size, ctx_len, 3, im_size, im_size),
-#             minval=0,
-#             maxval=255,
-#         )
-#         for _ in range(num_cams)
-#     ],
-#     img_feat=None,
-#     img_pooled=None,
-#     state=jax.random.uniform(key, shape=(batch_size, ctx_len, dofs)),
-#     noisy_state=jax.random.uniform(key, shape=(batch_size, ctx_len, dofs)),
-#     prev_action=jax.random.uniform(key, shape=(batch_size, ctx_len, dofs)),
-#     mask=jnp.ones((batch_size, ctx_len)),
-# )
+jax_model = jax_model.eval()
 
 obs = seq_jax.policy.Observation(
     img_rgb=[

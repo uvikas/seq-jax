@@ -488,11 +488,11 @@ class VisionTransformerExtractor(VisionTransformer):
 
 
 _MODELS = {
-    "vits-mae-hoi": "mae_pretrain_hoi_vit_small.jax",
-    "vits-mae-egosoup": "mae_pretrain_egosoup_vit_small.jax",
-    "vitb-mae-egosoup": "mae_pretrain_egosoup_vit_base.jax",
-    "vitl-mae-egosoup": "mae_pretrain_egosoup_vit_large_256.jax",
-    "vith-mae-egosoup": "mae_pretrain_egosoup_vit_huge_256.jax",
+    "vits-mae-hoi": "mae_pretrain_hoi_vit_small",
+    "vits-mae-egosoup": "mae_pretrain_egosoup_vit_small",
+    "vitb-mae-egosoup": "mae_pretrain_egosoup_vit_base",
+    "vitl-mae-egosoup": "mae_pretrain_egosoup_vit_large_256",
+    "vith-mae-egosoup": "mae_pretrain_egosoup_vit_huge_256",
 }
 
 
@@ -510,19 +510,17 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
         class_token=True,
         **kwargs,
     )
-    model = VisionTransformerExtractor(**model_kwargs, rngs=rngs)
+    # model = VisionTransformerExtractor(**model_kwargs, rngs=rngs)
 
-    # checkpointer = ocp.StandardCheckpointer()
-    # abstract_model = nnx.eval_shape(
-    #     lambda: VisionTransformerExtractor(**model_kwargs, rngs=nnx.Rngs(0))
-    # )
-    # graphdef, rng_state, other_state = nnx.split(abstract_model, nnx.RngState, ...)
-
-    # state_restored = checkpointer.restore(pretrained, other_state)
-    # state_restored = nnx.merge_state(state_restored, rng_state)
-    # model = nnx.merge(graphdef, state_restored)
-
+    ckptr = ocp.PyTreeCheckpointer()
+    abstract_model = nnx.eval_shape(
+        lambda: VisionTransformerExtractor(**model_kwargs, rngs=nnx.Rngs(0))
+    )
+    graphdef, other_state = nnx.split(abstract_model)
+    state_restored = ckptr.restore(pretrained, other_state)
+    model = nnx.merge(graphdef, state_restored)
     print("Loaded encoder from: {}".format(pretrained))
+
     return model
 
 
@@ -550,7 +548,7 @@ class VisionEncoder(nnx.Module):
         **kwargs,
     ):
         self.name = cfg.name
-        pretrain_path: Optional[str] = "none"
+        pretrain_path = "none"
         if cfg.pretrain_dir and cfg.name in _MODELS:
             path = os.path.join(cfg.pretrain_dir, _MODELS[cfg.name])
             if os.path.exists(path):

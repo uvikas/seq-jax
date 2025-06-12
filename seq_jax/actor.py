@@ -27,7 +27,6 @@ class ModelConfig:
     pred_len: int = 1
     num_cams: int = 3
     dofs: int = 24
-    train: bool = False
 
     frozen_filter: str = ".*img_encoder.*"
 
@@ -117,7 +116,6 @@ class TransformerConcatActor(nnx.Module):
             momentum=1.0,
             use_bias=False,
             use_scale=False,
-            use_running_average=not cfg.train,
             use_fast_variance=False,
             rngs=rngs,
         )
@@ -138,7 +136,6 @@ class TransformerConcatActor(nnx.Module):
         training = not self.obs_normalizer.use_running_average
 
         if training:
-            print("jax registering input stats")
             # Update running stats with the latest step (B, D)
             last = obs[-1:].reshape(-1, obs.shape[-1])
             _ = self.obs_normalizer(last, use_running_average=False)
@@ -161,18 +158,46 @@ class TransformerConcatActor(nnx.Module):
             is_leaf=lambda x: x is None,
         )
 
+        # Extract features from rgb
         if policy_in.img_feat is None:
-            # Extract features from rgb
-            img_feat = self.img_encoder(policy_in.img_rgb, rngs=rngs)
-            policy_in = policy_in.replace(img_feat=img_feat)
+            b, t, c, h, w = policy_in.img_rgb[0].shape
+            rgb_flat = [
+                rgb.reshape(b * t, c, h, w).astype(jnp.float32)
+                for rgb in policy_in.img_rgb
+            ]
+            rgb_cat = jnp.concatenate(rgb_flat, axis=0)
+            rgb_cat = normalize(rgb_cat)
+            feats = self.img_encoder(rgb_cat, rngs=rngs)
+            feats = jnp.array_split(feats, self.cfg.num_cams, axis=0)
+            feats = [feat.reshape(b, t, *feat.shape[1:]) for feat in feats]
+            policy_in = policy_in.replace(img_feat=feats)
+        else:
+            policy_in = policy_in.replace(
+                img_feat=[policy_in.img_feat[:, :, i] for i in range(self.cfg.num_cams)]
+            )
 
+        # Pool image features
         img_pooled = self.pool_feats(
-            [policy_in.img_feat[:, :, i] for i in range(self.cfg.num_cams)],
+            policy_in.img_feat,
             rngs=rngs,
         )
         policy_in = policy_in.replace(img_pooled=img_pooled)
-        pred_act = self.policy(policy_in, attn_mask, rngs=rngs)
 
+        # Concat + normalize
+        obs_cat = jnp.concatenate(
+            policy_in.img_pooled
+            + [
+                policy_in.state,
+                # obs.prev_action,
+            ],
+            axis=-1,
+        )
+        # (B, T, D) -> (T, B, D)
+        obs_cat = obs_cat.transpose(1, 0, 2)
+        obs_cat = self.normalize_traj(obs_cat)
+
+        # Predict actions + compute loss
+        pred_act = self.policy(obs_cat, attn_mask, rngs=rngs)
         loss = jnp.mean(jnp.square(pred_act.action - pred.action))
         loss_dict = {
             "action_loss": loss,

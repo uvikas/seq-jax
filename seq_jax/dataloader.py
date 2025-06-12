@@ -249,7 +249,7 @@ class TorchDataLoader:
                 try:
                     batch = next(data_iter)
                     batch = self.pack_batch(batch)
-                    if batch[0].state.shape[0] < self._sharding.num_devices:
+                    if batch[0].state.shape[0] % self._sharding.num_devices != 0:
                         print("Skipping batch with batch size", batch[0].state.shape[0])
                         continue
                 except StopIteration:
