@@ -249,7 +249,15 @@ class TorchDataLoader:
                 try:
                     batch = next(data_iter)
                     batch = self.pack_batch(batch)
-                    if batch[0].state.shape[0] % self._sharding.num_devices != 0:
+                    if (
+                        batch[0].state.shape[0] % self._sharding.num_devices != 0
+                        or jnp.isnan(batch[0].img_feat).any()
+                        or jnp.isnan(batch[0].state).any()
+                        or jnp.isnan(batch[0].noisy_state).any()
+                        or jnp.isnan(batch[0].prev_action).any()
+                        or jnp.isnan(batch[0].mask).any()
+                        or jnp.isnan(batch[1].action).any()
+                    ):
                         print("Skipping batch with batch size", batch[0].state.shape[0])
                         continue
                 except StopIteration:
