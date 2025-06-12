@@ -38,6 +38,10 @@ class LoggingConfig:
 
 
 def init_wandb(cfg: "TrainConfig"):
+    if cfg.log.wandb.mode == "disabled":
+        wandb.init(mode="disabled")
+        return
+
     name = os.path.basename(os.path.normpath(cfg.logdir))
     run_id_file = os.path.join(cfg.logdir, "wandb_id.txt")
 
