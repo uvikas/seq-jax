@@ -41,14 +41,13 @@ def setup_env(cfg: EnvConfig):
             print(f"WARNING: Setting {name} to {value}")
 
     # JAX config
-    jax.config.update("jax_enable_x64", False)
     jax.config.update("jax_default_matmul_precision", "float32")
 
     # See https://docs.jax.dev/en/latest/xla_flags.html
-    os.environ.setdefault(
-        "XLA_FLAGS",
-        "--xla_gpu_enable_triton_gemm=true ",
-    )
+    # os.environ.setdefault(
+    #     "XLA_FLAGS",
+    #     "--xla_gpu_enable_triton_gemm=true ",
+    # )
 
 
 @contextlib.contextmanager
