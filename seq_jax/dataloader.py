@@ -324,6 +324,21 @@ def _pred_slice(x, context_len, pred_len):
     return x[: context_len + pred_len - 1]
 
 
+def _validate_sample(sample):
+    """Validate that the sample doesn't contain any NaN/Inf values."""
+    vision, state, action, mask = sample
+    return (
+        not np.isnan(vision).any()
+        and not np.isnan(state).any()
+        and not np.isnan(action).any()
+        and not np.isnan(mask).any()
+        and not np.isinf(vision).any()
+        and not np.isinf(state).any()
+        and not np.isinf(action).any()
+        and not np.isinf(mask).any()
+    )
+
+
 def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDataset:
     roots = [
         glob(os.path.join(cfg.dataset_root, dataset_name, "*", "shard-*.tar"))
@@ -354,6 +369,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
                 >= cfg.actor.context_len + cfg.actor.action_len
             )
             .map(random_segmenter(cfg.actor.context_len, cfg.actor.action_len))
+            .select(_validate_sample)
             .batched(cfg.mb_size)
         )
     else:
@@ -368,6 +384,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
                 partial(_pred_slice, context_len=context_len, pred_len=pred_len),
                 partial(_ctx_slice, context_len=context_len),
             )
+            .select(_validate_sample)
             .batched(cfg.mb_size)
         )
     return dataset

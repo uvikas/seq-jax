@@ -14,6 +14,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python tools/train.py dist.num_devices=8 da
 ## Todo
 - [ ] Multi-host, multi-device
 - [ ] Dataloading
+- [ ] Double check initialization / rng keys
 
 ## Perf Tuning
 Currently, this code prefers NOT to relax precision to faithfully reproduce torch outputs. These are things to revisit for potential speedups:
