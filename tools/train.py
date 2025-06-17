@@ -270,7 +270,10 @@ def train(cfg: TrainConfig):
 
         with meter.timer("io"):
             # Get next batch
-            data = next(dataloader)
+            while True:
+                data = next(dataloader)
+                if not jnp.isnan(data[0].img_feat).any():
+                    break
 
         with meter.timer("fwd_bwd"):
             # Perform training step
