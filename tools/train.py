@@ -14,7 +14,6 @@ import termcolor
 import time
 import torch
 
-from absl import logging
 from dataclasses import dataclass, field
 from flax import nnx, struct
 from functools import partial
@@ -22,7 +21,13 @@ from jax.sharding import PartitionSpec as P
 from omegaconf import OmegaConf
 
 from seq_jax.dataloader import DataConfig, make_dataloader
-from seq_jax.distributed import DistributedConfig, EnvConfig, set_mesh, setup_env
+from seq_jax.distributed import (
+    DistributedConfig,
+    EnvConfig,
+    set_mesh,
+    setup_env,
+    init_dist,
+)
 from seq_jax.logging import LoggingConfig, make_meter, init_wandb
 from seq_jax.actor import ModelConfig, make_model, Observation, Prediction
 from seq_jax.optim import OptimConfig, make_optimizer, make_lr_scheduler
@@ -174,6 +179,7 @@ def train_step(
     nnx.update(model, new_params)
     new_params = nnx.state(model)
 
+    # TODO: grad norm + clip twice...
     clipped_grads, _ = optax.clip_by_global_norm(cfg.optim.clip_norm).update(
         grads, None
     )
@@ -206,8 +212,9 @@ def train_step(
 
 
 def train(cfg: TrainConfig):
-    init_wandb(cfg)
     setup_env(cfg.env)
+    init_dist(cfg.dist)
+    init_wandb(cfg)
 
     print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
     print(f"Jax devices: {jax.device_count()}")
@@ -217,7 +224,7 @@ def train(cfg: TrainConfig):
     rngs = nnx.Rngs(init_rng)
 
     # Setup training components
-    mesh = jax.make_mesh((cfg.dist.num_devices,), ("data",))
+    mesh = jax.make_mesh((jax.device_count(),), ("data",))
     data_sharding = jax.sharding.NamedSharding(mesh, P("data"))
     replicated_sharding = jax.sharding.NamedSharding(mesh, P())
     dataloader = make_dataloader(
@@ -256,6 +263,7 @@ def train(cfg: TrainConfig):
     print(f"JIT compilation complete in {time.perf_counter() - t:.2f}s")
 
     # Training loop
+
     for step in range(state.step, cfg.optim.num_steps):
         meter.reset()
         meter.iter_tic()
@@ -269,20 +277,25 @@ def train(cfg: TrainConfig):
             with set_mesh(mesh):
                 state, metrics = ptrain_step(state, data, step_rngs[step])
 
-        metrics = {
-            key: value.item() if isinstance(value, jnp.ndarray) else value
-            for key, value in metrics.items()
-        }
-        metrics["loss"] = {key: value.item() for key, value in metrics["loss"].items()}
+        with meter.timer("metrics"):
+            metrics = {
+                key: value.item() if isinstance(value, jnp.ndarray) else value
+                for key, value in metrics.items()
+            }
+            metrics["loss"] = {
+                key: value.item() for key, value in metrics["loss"].items()
+            }
+            metrics["prefetch"] = dataloader.prefetched()
 
-        # Log metrics
-        meter.iter_toc()
-        meter.update(metrics)
-        meter.log_iter_stats(step)
+            # Log metrics
+            meter.iter_toc()
+            meter.update(metrics)
+            meter.log_iter_stats(step)
 
-        # Save a checkpoint
-        if (step + 1) % cfg.log.save_freq == 0 or step == cfg.optim.num_steps - 1:
-            save_state(ckptr, state, step)
+        with meter.timer("save"):
+            # Save a checkpoint
+            if (step + 1) % cfg.log.save_freq == 0 or step == cfg.optim.num_steps - 1:
+                save_state(ckptr, state, step)
 
 
 def read_cfg() -> TrainConfig:

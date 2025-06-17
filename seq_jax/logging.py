@@ -247,7 +247,7 @@ class IterTrainMeter(object):
             self.losses[name].add_value(value)
         self.lr = metrics["lr"]
         self.num_samples += metrics["batch_size"]
-        self.prefetched_size = 0
+        self.prefetched_size = metrics["prefetch"]
         self.batch_size = metrics["batch_size"]
         self.grad_norm = metrics["grad_norm"]
         self.param_norm = metrics["param_norm"]
@@ -301,7 +301,7 @@ class IterTrainMeter(object):
         )
 
 
-def make_meter(cfg: LoggingConfig, total_iter: int):
+def make_meter(cfg: LoggingConfig, total_iter: int) -> IterTrainMeter:
     return IterTrainMeter(
         cfg.losses,
         total_iter,

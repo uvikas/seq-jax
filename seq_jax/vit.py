@@ -9,6 +9,7 @@ import orbax.checkpoint as ocp
 from dataclasses import dataclass
 from flax import nnx
 from functools import partial
+from jax.sharding import PartitionSpec as P
 
 
 def normalize(ims: jax.Array) -> jax.Array:
@@ -512,11 +513,21 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
     )
     # model = VisionTransformerExtractor(**model_kwargs, rngs=rngs)
 
-    ckptr = ocp.PyTreeCheckpointer()
+    ckptr = ocp.StandardCheckpointer()
     abstract_model = nnx.eval_shape(
         lambda: VisionTransformerExtractor(**model_kwargs, rngs=nnx.Rngs(0))
     )
     graphdef, other_state = nnx.split(abstract_model)
+
+    # TODO: do we need to replicate across all devices here?
+    mesh = jax.sharding.Mesh(jax.local_devices(), ("data",))
+    replicated_sharding = jax.sharding.NamedSharding(mesh, P())
+    other_state = jax.tree.map(
+        lambda a: jax.ShapeDtypeStruct(
+            a.shape, a.dtype, sharding=replicated_sharding
+        ),
+        other_state,
+    )
     state_restored = ckptr.restore(pretrained, other_state)
     model = nnx.merge(graphdef, state_restored)
     print("Loaded encoder from: {}".format(pretrained))

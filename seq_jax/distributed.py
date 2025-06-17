@@ -1,3 +1,5 @@
+from typing import List
+
 import os
 
 import atexit
@@ -6,7 +8,7 @@ import jax
 import shutil
 import tempfile
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 
 class _MeshState:
@@ -16,8 +18,12 @@ class _MeshState:
 @dataclass
 class DistributedConfig:
     platform: str = "gpu"
-    num_devices: int = 8
-    spawn_method: str = "fork"
+
+    init_dist: bool = False
+    coord_addr: str | None = None
+    num_processes: int | None = None
+    devices_per_process: int | None = None
+    process_id: int | None = None
 
 
 @dataclass
@@ -48,6 +54,22 @@ def setup_env(cfg: EnvConfig):
     #     "XLA_FLAGS",
     #     "--xla_gpu_enable_triton_gemm=true ",
     # )
+
+
+def init_dist(cfg: DistributedConfig):
+    if not cfg.init_dist:
+        return
+
+    print(f"Initializing distributed with {cfg=}")
+    jax.distributed.initialize(
+        coordinator_address=cfg.coord_addr,
+        num_processes=cfg.num_processes,
+        process_id=cfg.process_id,
+    )
+
+    print(
+        f"Initialized process {cfg.process_id} of {cfg.num_processes}: {jax.devices()=} {jax.local_devices()=}"
+    )
 
 
 @contextlib.contextmanager

@@ -1,12 +1,15 @@
 """Dataloader."""
 
-from typing import List
+from typing import Any, Iterator, List
 import os
 
 import jax
+import jax.dlpack as jdl
 import jax.numpy as jnp
 import multiprocessing
 import numpy as np
+import queue
+import threading
 import torch
 import webdataset as wds
 
@@ -15,7 +18,6 @@ from jax.sharding import Sharding
 from functools import partial
 from glob import glob
 
-from seq_jax import util
 from seq_jax.policy import Observation, Prediction
 
 
@@ -23,7 +25,7 @@ from seq_jax.policy import Observation, Prediction
 class DataConfig:
     dataset_type: str = "wds"
     chunked: bool = False
-    mb_size: int = 256
+    global_batch_size: int = 256
     shufflebuffer: int = 1024
     shardshuffle: int = 100
     num_workers: int = 4
@@ -145,7 +147,7 @@ def pack_batch(
     context_len: int,
     pred_len: int,
 ):
-    batch = jax.tree.map(lambda x: jnp.asarray(x.numpy()), batch)
+    batch = jax.tree.map(lambda x: jdl.from_dlpack(x), batch)
     vision, states, actions, masks = batch
 
     if action_type == "absolute":
@@ -182,7 +184,7 @@ def pack_batch(
 
 
 def _collate_fn(items):
-    """Collate the batch elements into batched numpy arrays."""
+    """Collate the batch elements into torch tensors for more efficient IPC."""
     val = jax.tree.map(lambda x: torch.from_numpy(x), items)
     return val
 
@@ -191,6 +193,47 @@ def _worker_init_fn(worker_id: int) -> None:
     """Tell JAX inside the worker process not to preallocate the GPU memory."""
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
+
+class PrefetchLoader(Iterator):
+    def __init__(
+        self,
+        dataloader: Iterator[Any],
+        sharding: jax.sharding.Sharding,
+        buffer_size: int = 16,
+        num_workers: int = 4,
+    ):
+        self._dl_iter = iter(dataloader)
+        self._sharding = sharding
+        self._queue = queue.Queue(maxsize=buffer_size)
+        self._sentinel = object()
+
+        def _worker():
+            for b in self._dl_iter:
+                # `b` is a pytree of torch.Tensors → numpy → sharded JAX arrays
+                b = jax.tree.map(
+                    lambda x: jax.make_array_from_process_local_data(
+                        sharding,
+                        x,
+                    ),
+                    b,
+                )
+                self._queue.put(b)
+            self._queue.put(self._sentinel)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def prefetched(self):
+        return self._queue.qsize()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Any:
+        batch = self._queue.get()
+        if batch is self._sentinel:
+            raise StopIteration
+        return batch
 
 
 class TorchDataLoader:
@@ -204,15 +247,11 @@ class TorchDataLoader:
         seed: int = 0,
     ):
         """Create a PyTorch data loader."""
-        if jax.process_count() > 1:
-            raise NotImplementedError(
-                "Data loading with multiple processes is not supported."
-            )
-
         if sharding is None:
             raise ValueError("Sharding is required")
 
         self._sharding = sharding
+        self._batch_size = cfg.global_batch_size // jax.process_count()
         mp_context = None
         if cfg.num_workers > 0:
             mp_context = multiprocessing.get_context("spawn")
@@ -249,8 +288,9 @@ class TorchDataLoader:
                 try:
                     batch = next(data_iter)
                     batch = self.pack_batch(batch)
+
                     if (
-                        batch[0].state.shape[0] % self._sharding.num_devices != 0
+                        batch[0].state.shape[0] != self._batch_size
                         or jnp.isnan(batch[0].img_feat).any()
                         or jnp.isnan(batch[0].state).any()
                         or jnp.isnan(batch[0].noisy_state).any()
@@ -262,10 +302,7 @@ class TorchDataLoader:
                         continue
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
-                yield jax.tree.map(
-                    lambda x: jax.make_array_from_process_local_data(self._sharding, x),
-                    batch,
-                )
+                yield batch
 
 
 def random_segmenter(ctx_len: int, action_len: int):
@@ -370,7 +407,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
             )
             .map(random_segmenter(cfg.actor.context_len, cfg.actor.action_len))
             .select(_validate_sample)
-            .batched(cfg.mb_size)
+            .batched(cfg.global_batch_size // jax.process_count())
         )
     else:
         dataset = (
@@ -385,7 +422,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
                 partial(_ctx_slice, context_len=context_len),
             )
             .select(_validate_sample)
-            .batched(cfg.mb_size)
+            .batched(cfg.global_batch_size // jax.process_count())
         )
     return dataset
 
@@ -402,4 +439,6 @@ def make_dataloader(
         sharding,
         seed=0,
     )
-    return iter(dataloader)
+    dataloader = iter(dataloader)
+    dataloader = PrefetchLoader(dataloader, sharding)
+    return dataloader
