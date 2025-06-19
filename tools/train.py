@@ -261,14 +261,7 @@ def train(cfg: TrainConfig):
     # Pre-generate RNG keys
     step_rngs = jax.random.split(train_rng, cfg.optim.num_steps)
 
-    print("Warming up JIT compilation...")
-    t = time.perf_counter()
-    dummy_data = next(dataloader)
-    ptrain_step(state, dummy_data, step_rngs[0])
-    print(f"JIT compilation complete in {time.perf_counter() - t:.2f}s")
-
     # Training loop
-
     for step in range(state.step, cfg.optim.num_steps):
         meter.reset()
         meter.iter_tic()

@@ -23,7 +23,7 @@ class WandbConfig:
 @dataclass
 class LoggingConfig:
     save_freq: int = 1000
-    log_freq: int = 1
+    log_freq: int = 20
     losses: List[str] = field(
         default_factory=lambda: [
             "action_loss",
@@ -204,11 +204,13 @@ class IterTrainMeter(object):
         self,
         loss_names: List[str],
         max_iter: int,
-        log_period: int = 1,
+        log_period: int = 20,
+        warmup_period: int = 20,
         phase: str = "train",
     ):
         self.max_iter = max_iter
         self.log_period = log_period
+        self.warmup_period = warmup_period
         self.phase = phase
         self.iter_timer = Timer()
 
@@ -282,7 +284,7 @@ class IterTrainMeter(object):
         stats["latency"] = latency_stats
         stats["loss"] = loss_stats
 
-        if (cur_iter + 1) % self.log_period == 0:
+        if (cur_iter + 1) <= self.warmup_period or (cur_iter + 1) % self.log_period == 0:
             print(dump_json_stats(stats, self.phase + "_iter"))
 
         wandb.log(
