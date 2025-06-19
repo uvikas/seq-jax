@@ -145,10 +145,15 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
     return restored_state
 
 
-def save_state(ckptr: ocp.CheckpointManager, state: TrainState, step: int):
+def save_state(
+    ckptr: ocp.CheckpointManager, state: TrainState, step: int, wait: bool = False
+):
     step = int(state.step)
     print(f"Saving checkpoint at step {step} to {ckptr.directory}")
     ckptr.save(step, items={"train_state": state})
+
+    if wait:
+        ckptr.wait_until_finished()
 
 
 def train_step(
@@ -298,7 +303,9 @@ def train(cfg: TrainConfig):
         with meter.timer("save"):
             # Save a checkpoint
             if (step + 1) % cfg.log.save_freq == 0 or step == cfg.optim.num_steps - 1:
-                save_state(ckptr, state, step)
+                # Wait for the final checkpoint to complete
+                is_final_checkpoint = step == cfg.optim.num_steps - 1
+                save_state(ckptr, state, step, wait=is_final_checkpoint)
 
 
 def read_cfg() -> TrainConfig:
