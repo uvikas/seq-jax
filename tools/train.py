@@ -27,6 +27,9 @@ from seq_jax.distributed import (
     set_mesh,
     setup_env,
     init_dist,
+    fsdp_sharding,
+    make_mesh,
+    BATCH_AXIS,
 )
 from seq_jax.logging import LoggingConfig, make_meter, init_wandb
 from seq_jax.actor import ModelConfig, make_model, Observation, Prediction
@@ -76,34 +79,68 @@ def make_train_state(
     rngs: nnx.Rngs,
 ):
     """Create initial training state."""
-    # Create model and optimizer
-    model = make_model(cfg.model, rngs=rngs)
-    params = nnx.state(model)
+
     tx = make_optimizer(cfg.optim, lr_scheduler)
 
-    # Filter frozen parameters
-    trainable_params = params.filter(cfg.trainable_filter)
-    frozen_params = params.filter(cfg.frozen_filter)
-    print(
-        "Frozen params: "
-        + ", ".join(
-            [
-                ".".join([str(it) for it in path_tuple])
-                for path_tuple in frozen_params.flat_state().paths
-            ]
-        ),
+    def init(
+        params: nnx.State,
+        graphdef: nnx.GraphDef,
+    ):
+        # Filter frozen parameters
+        trainable_params = params.filter(cfg.trainable_filter)
+        frozen_params = params.filter(cfg.frozen_filter)
+        print(
+            "Frozen params: "
+            + ", ".join(
+                [
+                    ".".join([str(it) for it in path_tuple])
+                    for path_tuple in frozen_params.flat_state().paths
+                ]
+            ),
+        )
+        opt_state = tx.init(trainable_params)
+        state = TrainState(
+            step=0,
+            params=params,
+            model_def=graphdef,
+            tx=tx,
+            opt_state=opt_state,
+            ema_alpha=cfg.optim.ema_alpha,
+            ema_params=params,
+        )
+        return state
+
+    model = make_model(cfg.model, rngs=rngs)
+    params = nnx.state(model)
+    graphdef = nnx.graphdef(model)
+
+    train_state_shape = jax.eval_shape(init, params, graphdef)
+    state_sharding = fsdp_sharding(train_state_shape, mesh, log=True)
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+    # Count number of params
+    encoder_params = sum(
+        np.prod(p.shape)
+        for p in jax.tree_util.tree_leaves(nnx.state(model.img_encoder))
     )
-    opt_state = tx.init(trainable_params)
-    state = TrainState(
-        step=0,
-        params=params,
-        model_def=nnx.graphdef(model),
-        tx=tx,
-        opt_state=opt_state,
-        ema_alpha=cfg.optim.ema_alpha,
-        ema_params=params,
+    query_pool_params = sum(
+        np.prod(p.shape) for p in jax.tree_util.tree_leaves(nnx.state(model.attn_pool))
     )
-    return state
+    policy_params = sum(
+        np.prod(p.shape) for p in jax.tree_util.tree_leaves(nnx.state(model.policy))
+    )
+    print(f"Encoder params: {encoder_params / 1e6:.2f}M")
+    print(f"Query pool params: {query_pool_params / 1e6:.2f}M")
+    print(f"Policy params: {policy_params / 1e6:.2f}M")
+
+    train_state_fn = jax.jit(
+        init,
+        in_shardings=replicated_sharding,
+        out_shardings=state_sharding,
+    )
+    train_state = train_state_fn(params, graphdef)
+
+    return train_state, state_sharding
 
 
 def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManager:
@@ -229,8 +266,8 @@ def train(cfg: TrainConfig):
     rngs = nnx.Rngs(init_rng)
 
     # Setup training components
-    mesh = jax.make_mesh((jax.device_count(),), ("data",))
-    data_sharding = jax.sharding.NamedSharding(mesh, P("data"))
+    mesh = make_mesh(cfg.dist)
+    data_sharding = jax.sharding.NamedSharding(mesh, P(BATCH_AXIS))
     replicated_sharding = jax.sharding.NamedSharding(mesh, P())
     dataloader = make_dataloader(
         cfg.data,
@@ -243,7 +280,7 @@ def train(cfg: TrainConfig):
     ckptr = make_checkpointer(cfg.logdir, resume=cfg.resume)
 
     # Create train state
-    state = make_train_state(cfg, lr_scheduler, mesh, rngs=rngs)
+    state, state_sharding = make_train_state(cfg, lr_scheduler, mesh, rngs)
     if cfg.resume:
         state = restore_state(ckptr, state)
 
@@ -253,8 +290,8 @@ def train(cfg: TrainConfig):
             lr_scheduler=lr_scheduler,
             cfg=cfg,
         ),
-        in_shardings=(replicated_sharding, data_sharding, replicated_sharding),
-        out_shardings=(replicated_sharding, replicated_sharding),
+        in_shardings=(state_sharding, data_sharding, replicated_sharding),
+        out_shardings=(state_sharding, replicated_sharding),
         # donate_argnums=(0, 1),
     )
 

@@ -95,10 +95,10 @@ class TransformerConcatActor(nnx.Module):
         self.img_encoder = VisionEncoder(cfg.encoder, rngs=rngs)
 
         # 3 images, 1 state, 1 action
-        inp_dims = [cfg.policy.embed_dim] * cfg.num_cams + [cfg.dofs] + [cfg.dofs]
-        obs_shape = sum(inp_dims[:-1])  # Exclude action dim from input
+        inp_dims = (cfg.policy.embed_dim,) * cfg.num_cams + (cfg.dofs,) + (cfg.dofs,)
+        # obs_shape = sum(inp_dims[:-1])  # Exclude action dim from input
         # 3 images, 1 state, 1 action
-        out_dims = [cfg.policy.embed_dim] * cfg.num_cams + [cfg.dofs] + [cfg.dofs]
+        out_dims = (cfg.policy.embed_dim,) * cfg.num_cams + (cfg.dofs,) + (cfg.dofs,)
 
         self.attn_pool = [
             QueryPool(
@@ -111,7 +111,7 @@ class TransformerConcatActor(nnx.Module):
         ]
 
         self.obs_normalizer = nnx.BatchNorm(
-            num_features=obs_shape,
+            num_features=sum(inp_dims[:-1]),
             epsilon=1e-5,
             momentum=1.0,
             use_bias=False,
@@ -129,7 +129,7 @@ class TransformerConcatActor(nnx.Module):
             rngs=rngs,
         )  # exclude action from input
 
-        self.mask_token = nnx.Param(jnp.zeros(obs_shape))
+        self.mask_token = nnx.Param(jnp.zeros(sum(inp_dims[:-1])))
         self.action_start_token = nnx.Param(jnp.zeros((1, 1, out_dims[-1])))
 
     def normalize_traj(self, obs: jnp.array) -> jnp.array:
@@ -181,6 +181,7 @@ class TransformerConcatActor(nnx.Module):
             policy_in.img_feat,
             rngs=rngs,
         )
+
         policy_in = policy_in.replace(img_pooled=img_pooled)
 
         # Concat + normalize

@@ -5,10 +5,14 @@ import os
 import atexit
 import contextlib
 import jax
+import numpy as np
 import shutil
 import tempfile
 
 from dataclasses import dataclass, asdict, field
+
+BATCH_AXIS = "data"
+FSDP_AXIS = "model"
 
 
 class _MeshState:
@@ -18,6 +22,9 @@ class _MeshState:
 @dataclass
 class DistributedConfig:
     platform: str = "gpu"
+
+    # (data, model)
+    mesh_shape: List[int] = field(default_factory=lambda: [8, 1])
 
     init_dist: bool = False
     coord_addr: str | None = None
@@ -70,6 +77,74 @@ def init_dist(cfg: DistributedConfig):
     print(
         f"Initialized process {cfg.process_id} of {cfg.num_processes}: {jax.devices()=} {jax.local_devices()=}"
     )
+
+
+def fsdp_sharding(
+    pytree,
+    mesh: jax.sharding.Mesh,
+    *,
+    min_size_mbytes: int = 4,  # 4 MiB
+    log: bool = False,
+):
+    """Apply FSDP sharding to a pytree of arrays based on the mesh shape.
+
+    Args:
+        pytree: A pytree to be apply sharding specified by the mesh, note that only array types (eg. contains .shape attr)
+          will be considered for sharding.
+        mesh: The mesh being used for applying sharding on to pytree.
+        min_size_mbytes: The minimum size of the array in MiB to be considered for sharding, any array smaller than this
+          will be replicated.
+        log: If true, will log the sharding decisions for arrays that are being considered for sharding.
+
+    Returns:
+        The sharded pytree.
+    """
+    min_size_bytes = min_size_mbytes * 2**20
+
+    def _shard_arr(kp, array: jax.ShapeDtypeStruct):
+        # if fsdp is not actually going to be used, replicate everything to avoid extraneous logging
+        if mesh.shape[FSDP_AXIS] == 1:
+            return jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+        # replicate scalar and vector arrays
+        if not hasattr(array, "shape"):
+            return None
+        if len(array.shape) < 2:
+            return jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+        # replicate small arrays
+        if (
+            arr_size := np.prod(array.shape) * np.dtype(array.dtype).itemsize
+        ) < min_size_bytes:
+            return jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+        # shard matrices and larger tensors along the largest axis that is divisible by the fsdp dimension
+        axes = np.argsort(array.shape)[::-1]
+        spec = [None] * len(axes)
+        for i in axes:
+            if array.shape[i] % mesh.shape[FSDP_AXIS] == 0:
+                if log:
+                    print(
+                        f"Sharding {jax.tree_util.keystr(kp)} of shape {array.shape} ({arr_size / 2**20:.2f} MiB) along axis {i}"
+                    )
+                spec[i] = FSDP_AXIS
+                return jax.sharding.NamedSharding(
+                    mesh, jax.sharding.PartitionSpec(*spec)
+                )
+
+        # replicate if no valid sharding was found
+        if log:
+            print(
+                f"Could not find a valid sharding for {jax.tree_util.keystr(kp)} of shape {array.shape} with mesh of shape {mesh.shape}"
+            )
+        return jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+    return jax.tree_util.tree_map_with_path(_shard_arr, pytree)
+
+
+def make_mesh(cfg: DistributedConfig):
+    devices = np.array(jax.devices()).reshape(cfg.mesh_shape)
+    mesh = jax.sharding.Mesh(devices, (BATCH_AXIS, FSDP_AXIS))
+    print(f"Created mesh {mesh=}")
+    return mesh
 
 
 @contextlib.contextmanager

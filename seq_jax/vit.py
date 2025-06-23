@@ -11,6 +11,8 @@ from flax import nnx
 from functools import partial
 from jax.sharding import PartitionSpec as P
 
+from seq_jax.distributed import BATCH_AXIS, FSDP_AXIS
+
 
 def normalize(ims: jax.Array) -> jax.Array:
     """Normalize images using ImageNet mean and std."""
@@ -520,12 +522,10 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
     graphdef, other_state = nnx.split(abstract_model)
 
     # TODO: do we need to replicate across all devices here?
-    mesh = jax.sharding.Mesh(jax.local_devices(), ("data",))
+    mesh = jax.sharding.Mesh(jax.local_devices(), (BATCH_AXIS,))
     replicated_sharding = jax.sharding.NamedSharding(mesh, P())
     other_state = jax.tree.map(
-        lambda a: jax.ShapeDtypeStruct(
-            a.shape, a.dtype, sharding=replicated_sharding
-        ),
+        lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype, sharding=replicated_sharding),
         other_state,
     )
     state_restored = ckptr.restore(pretrained, other_state)

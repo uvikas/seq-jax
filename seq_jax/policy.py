@@ -449,20 +449,20 @@ class TransformerConcatPolicy(nnx.Module):
         self.pred_len = pred_len
         self.multihead_proj = cfg.multihead_proj
 
-        self.input_dim = sum(inp_dims)
-        self.output_dim = sum(out_dims)
+        self.input_dim = tuple(inp_dims)
+        self.output_dim = tuple(out_dims)
         # Must be static tuple
         self.split_output = tuple(np.array(out_dims).cumsum())
 
         self.in_proj1 = MLP(
-            self.input_dim,
-            self.input_dim // 2,
+            sum(self.input_dim),
+            sum(self.input_dim) // 2,
             cfg.in_proj_hidden_sizes,
             stable_init=False,
             rngs=rngs,
         )
         self.in_proj2 = MLP(
-            self.input_dim // 2,
+            sum(self.input_dim) // 2,
             cfg.embed_dim,
             cfg.in_proj_hidden_sizes,
             stable_init=False,
@@ -489,7 +489,7 @@ class TransformerConcatPolicy(nnx.Module):
             self.out_proj = [
                 MLP(
                     cfg.embed_dim,
-                    self.output_dim,
+                    sum(self.output_dim),
                     cfg.head_hidden_sizes,
                     stable_init=True,
                     rngs=rngs,
@@ -499,7 +499,7 @@ class TransformerConcatPolicy(nnx.Module):
         else:
             self.out_proj = MLP(
                 cfg.embed_dim,
-                self.output_dim,
+                sum(self.output_dim),
                 cfg.head_hidden_sizes,
                 stable_init=True,
                 rngs=rngs,
@@ -525,7 +525,7 @@ class TransformerConcatPolicy(nnx.Module):
             img_pooled, state, action = [], [], []
             for proj in self.out_proj:
                 out = proj(x)
-                splits = jnp.split(out, self.output_dims, axis=-1)
+                splits = jnp.split(out, self.split_output, axis=-1)
                 img_pooled.append(splits[:3])
                 state.append(splits[3])
                 action.append(splits[4])
