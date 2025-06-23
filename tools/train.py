@@ -6,7 +6,6 @@ import os
 import dataclasses
 import jax
 import jax.numpy as jnp
-import jax.lax as lax
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
@@ -31,7 +30,14 @@ from seq_jax.distributed import (
     make_mesh,
     BATCH_AXIS,
 )
-from seq_jax.logging import LoggingConfig, make_meter, init_wandb
+from seq_jax.logging import (
+    LoggingConfig,
+    make_meter,
+    init_wandb,
+    init_profiler,
+    start_trace,
+    stop_trace,
+)
 from seq_jax.actor import ModelConfig, make_model, Observation, Prediction
 from seq_jax.optim import OptimConfig, make_optimizer, make_lr_scheduler
 from seq_jax import util
@@ -257,6 +263,7 @@ def train(cfg: TrainConfig):
     setup_env(cfg.env)
     init_dist(cfg.dist)
     init_wandb(cfg)
+    init_profiler(cfg.log.profiler)
 
     print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
     print(f"Jax devices: {jax.device_count()}")
@@ -300,6 +307,9 @@ def train(cfg: TrainConfig):
 
     # Training loop
     for step in range(state.step, cfg.optim.num_steps):
+        if cfg.log.profiler.enabled and step == cfg.log.profiler.start_step:
+            start_trace(cfg.log.profiler, step)
+
         meter.reset()
         meter.iter_tic()
 
@@ -329,6 +339,9 @@ def train(cfg: TrainConfig):
             meter.iter_toc()
             meter.update(metrics)
             meter.log_iter_stats(step)
+
+        if cfg.log.profiler.enabled and step == cfg.log.profiler.stop_step:
+            stop_trace(cfg.log.profiler, step)
 
         with meter.timer("save"):
             # Save a checkpoint

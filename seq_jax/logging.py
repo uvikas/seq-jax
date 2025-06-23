@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 import os
 import wandb
 import numpy as np
+import jax
 import decimal
 import simplejson
 import time
@@ -18,6 +19,15 @@ class WandbConfig:
     project: str = "seq-jax"
     entity: str = "my-gcp-project"
     mode: str = "disabled"
+
+
+@dataclass
+class ProfilerConfig:
+    enabled: bool = False
+    profile_dir: str = "/tmp/jax_profile"
+    port: int = 9999
+    start_step: int = 5
+    stop_step: int = 10
 
 
 @dataclass
@@ -35,6 +45,7 @@ class LoggingConfig:
         ]
     )
     wandb: WandbConfig = field(default_factory=WandbConfig)
+    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
 
 def init_wandb(cfg: "TrainConfig"):
@@ -64,6 +75,36 @@ def init_wandb(cfg: "TrainConfig"):
         )
         with open(run_id_file, "w") as f:
             f.write(wandb.run.id)
+
+
+def init_profiler(cfg: ProfilerConfig):
+    if cfg.enabled:
+        os.makedirs(cfg.profile_dir, exist_ok=True)
+        try:
+            jax.profiler.start_server(cfg.port)
+            print(f"[Profiler] JAX profiler server started on 0.0.0.0:{cfg.port}. ")
+        except Exception as e:
+            print(f"[Profiler] Failed to start profiler server: {e}")
+
+
+def start_trace(cfg: ProfilerConfig, step: int):
+    trace_dir = os.path.join(cfg.profile_dir, f"step_{step}")
+    os.makedirs(trace_dir, exist_ok=True)
+    print(f"[Profiler] Starting JAX trace. Output dir: {trace_dir}")
+    try:
+        jax.profiler.start_trace(trace_dir)
+    except Exception as _e:
+        print(f"[Profiler] Failed to start trace: {_e}")
+
+
+def stop_trace(cfg: ProfilerConfig, step: int):
+    try:
+        jax.profiler.stop_trace()
+        print(
+            f"[Profiler] Stopped JAX trace at step {step}. Trace saved to {cfg.profile_dir}"
+        )
+    except Exception as e:
+        print(f"[Profiler] Failed to stop trace: {e}")
 
 
 def time_string(seconds):
@@ -284,7 +325,9 @@ class IterTrainMeter(object):
         stats["latency"] = latency_stats
         stats["loss"] = loss_stats
 
-        if (cur_iter + 1) <= self.warmup_period or (cur_iter + 1) % self.log_period == 0:
+        if (cur_iter + 1) <= self.warmup_period or (
+            cur_iter + 1
+        ) % self.log_period == 0:
             print(dump_json_stats(stats, self.phase + "_iter"))
 
         wandb.log(
