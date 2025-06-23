@@ -200,7 +200,7 @@ class PrefetchLoader(Iterator):
         self,
         dataloader: Iterator[Any],
         sharding: jax.sharding.Sharding,
-        buffer_size: int = 48,
+        buffer_size: int = 32,
         num_workers: int = 4,
     ):
         self._dl_iter = iter(dataloader)
@@ -387,8 +387,14 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
 
     print("Webdataset using", len(roots), "shards")
 
-    names = [glob(os.path.join(cfg.dataset_root, dataset_name)) for dataset_name in cfg.dataset_names]
-    names = sorted([os.path.basename(item) for sublist in names for item in sublist], key=lambda x: x.split('_')[-1])
+    names = [
+        glob(os.path.join(cfg.dataset_root, dataset_name))
+        for dataset_name in cfg.dataset_names
+    ]
+    names = sorted(
+        [os.path.basename(item) for sublist in names for item in sublist],
+        key=lambda x: x.split("_")[-1],
+    )
     print(f"Dataset ({len(names)})", names)
 
     dataset = wds.WebDataset(
