@@ -1,0 +1,341 @@
+"""Train a BC model."""
+
+from typing import Any, Iterable, Tuple
+
+import os
+import dataclasses
+import jax
+import jax.numpy as jnp
+import numpy as np
+import optax
+import orbax.checkpoint as ocp
+import termcolor
+import time
+import torch
+
+from dataclasses import dataclass, field
+from flax import nnx, struct
+from functools import partial
+from jax.sharding import PartitionSpec as P
+from omegaconf import OmegaConf
+
+from seq_jax.dataloader import DataConfig, make_dataloader
+from seq_jax.distributed import (
+    DistributedConfig,
+    EnvConfig,
+    set_mesh,
+    setup_env,
+    init_dist,
+    fsdp_sharding,
+    make_mesh,
+    BATCH_AXIS,
+)
+from seq_jax.logging import (
+    LoggingConfig,
+    make_meter,
+    init_wandb,
+    init_profiler,
+    start_trace,
+    stop_trace,
+)
+from seq_jax.actor import ModelConfig, make_model, Observation, Prediction
+from seq_jax.optim import OptimConfig, make_optimizer, make_lr_scheduler
+from seq_jax import util
+
+
+@dataclass
+class TrainConfig:
+    exp_name: str = "fold"
+    logdir: str = "/tmp/bc/"
+    seed: int = 0
+    platform: str = "gpu"
+    resume: bool = False
+
+    data: DataConfig = field(default_factory=DataConfig)
+    optim: OptimConfig = field(default_factory=OptimConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    dist: DistributedConfig = field(default_factory=DistributedConfig)
+    env: EnvConfig = field(default_factory=EnvConfig)
+    log: LoggingConfig = field(default_factory=LoggingConfig)
+
+    @property
+    def trainable_filter(self):
+        return nnx.All(nnx.Param, nnx.Not(util.PathRegex(self.model.frozen_filter)))
+
+    @property
+    def frozen_filter(self):
+        return nnx.All(nnx.Param, util.PathRegex(self.model.frozen_filter))
+
+
+@struct.dataclass
+class TrainState:
+    step: int
+    params: nnx.State
+    model_def: nnx.GraphDef = struct.field(pytree_node=False)
+    tx: optax.GradientTransformation = struct.field(pytree_node=False)
+    opt_state: optax.OptState
+    ema_alpha: float
+    ema_params: Any
+
+
+def make_train_state(
+    cfg: TrainConfig,
+    lr_scheduler: optax.Schedule,
+    mesh: jax.sharding.Mesh,
+    rngs: nnx.Rngs,
+):
+    """Create initial training state."""
+
+    tx = make_optimizer(cfg.optim, lr_scheduler)
+
+    def init(
+        params: nnx.State,
+        graphdef: nnx.GraphDef,
+    ):
+        # Filter frozen parameters
+        trainable_params = params.filter(cfg.trainable_filter)
+        frozen_params = params.filter(cfg.frozen_filter)
+        print(
+            "Frozen params: "
+            + ", ".join(
+                [
+                    ".".join([str(it) for it in path_tuple])
+                    for path_tuple in frozen_params.flat_state().paths
+                ]
+            ),
+        )
+        opt_state = tx.init(trainable_params)
+        state = TrainState(
+            step=0,
+            params=params,
+            model_def=graphdef,
+            tx=tx,
+            opt_state=opt_state,
+            ema_alpha=cfg.optim.ema_alpha,
+            ema_params=params,
+        )
+        return state
+
+    model = make_model(cfg.model, rngs=rngs)
+    params = nnx.state(model)
+    graphdef = nnx.graphdef(model)
+
+    train_state_shape = jax.eval_shape(init, params, graphdef)
+    state_sharding = fsdp_sharding(train_state_shape, mesh, log=True)
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+    # Count number of params
+    encoder_params = sum(
+        np.prod(p.shape)
+        for p in jax.tree_util.tree_leaves(nnx.state(model.img_encoder))
+    )
+    query_pool_params = sum(
+        np.prod(p.shape) for p in jax.tree_util.tree_leaves(nnx.state(model.attn_pool))
+    )
+    policy_params = sum(
+        np.prod(p.shape) for p in jax.tree_util.tree_leaves(nnx.state(model.policy))
+    )
+    print(f"Encoder params: {encoder_params / 1e6:.2f}M")
+    print(f"Query pool params: {query_pool_params / 1e6:.2f}M")
+    print(f"Policy params: {policy_params / 1e6:.2f}M")
+
+    train_state_fn = jax.jit(
+        init,
+        in_shardings=replicated_sharding,
+        out_shardings=state_sharding,
+    )
+    train_state = train_state_fn(params, graphdef)
+
+    return train_state, state_sharding
+
+
+def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManager:
+    os.makedirs(logdir, exist_ok=True)
+    mngr = ocp.CheckpointManager(
+        os.path.abspath(logdir),
+        item_handlers={
+            "train_state": ocp.PyTreeCheckpointHandler(),
+            "params": ocp.PyTreeCheckpointHandler(),
+        },
+        options=ocp.CheckpointManagerOptions(
+            create=True,
+            enable_async_checkpointing=True,
+            async_options=ocp.AsyncOptions(
+                timeout_secs=7200,
+                create_directories_asynchronously=True,
+            ),
+            enable_background_delete=True,
+        ),
+    )
+
+    if not resume and not (tuple(mngr.all_steps()) in [(), (0,)]):
+        raise ValueError(
+            f"Log directory {logdir} already exists and contains checkpoints. "
+            "Set resume=True to resume training from the last checkpoint."
+        )
+
+    return mngr
+
+
+def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState:
+    if tuple(ckptr.all_steps()) in [(), (0,)]:
+        # No checkpoints saved, so we can't restore
+        return state
+
+    restored = ckptr.restore(step=None, items={"train_state": state})
+    restored_state = restored["train_state"]
+    print(f"Restored training state from checkpoint at step {restored_state.step}")
+    return restored_state
+
+
+def save_state(
+    ckptr: ocp.CheckpointManager, state: TrainState, step: int, wait: bool = False
+):
+    step = int(state.step)
+    print(f"Saving checkpoint at step {step} to {ckptr.directory}")
+    ckptr.save(step, items={"train_state": state})
+
+    if wait:
+        ckptr.wait_until_finished()
+
+
+def train_step(
+    model: nnx.Module,
+    optimizer: nnx.Optimizer,
+    data: Tuple[Observation, Prediction],
+    rngs: nnx.Rngs,
+    cfg: TrainConfig,
+):
+    """Perform a training step."""
+
+    def loss_fn(model: nnx.Module):
+        loss, loss_dict = model.compute_loss(obs, pred, rngs=rngs)
+        return loss, loss_dict
+
+    # Compute loss and gradients
+    obs, pred = data
+    diff_state = nnx.DiffState(0, cfg.trainable_filter)
+    grad_fn = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)
+    (loss, loss_dict), grads = grad_fn(model)
+
+    optimizer.update(grads)
+
+    clipped_grads = optax.clip_by_global_norm(cfg.optim.clip_norm).update(grads, None)
+
+    # Create metrics with minimal array allocations
+    metrics = {
+        "loss": loss_dict,
+        "grad_norm": optax.global_norm(clipped_grads),
+        "param_norm": optax.global_norm(nnx.state(model)),
+        "batch_size": obs.state.shape[0],
+    }
+
+    return loss, metrics
+
+
+def train(cfg: TrainConfig):
+    setup_env(cfg.env)
+    init_dist(cfg.dist)
+    init_wandb(cfg)
+    init_profiler(cfg.log.profiler)
+
+    print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
+    print(f"Jax devices: {jax.device_count()}")
+
+    root_rng = jax.random.PRNGKey(cfg.seed)
+    init_rng, train_rng = jax.random.split(root_rng)
+    rngs = nnx.Rngs(init_rng)
+
+    # Setup training components
+    mesh = make_mesh(cfg.dist)
+    data_sharding = jax.sharding.NamedSharding(mesh, P(BATCH_AXIS))
+    replicated_sharding = jax.sharding.NamedSharding(mesh, P())
+    dataloader = make_dataloader(
+        cfg.data,
+        cfg.model.context_len,
+        cfg.model.pred_len,
+        data_sharding,
+    )
+    lr_scheduler = make_lr_scheduler(cfg.optim)
+    meter = make_meter(cfg.log, cfg.optim.num_steps)
+    ckptr = make_checkpointer(cfg.logdir, resume=cfg.resume)
+
+    model = make_model(cfg.model, rngs=rngs)
+    optimizer = nnx.Optimizer(
+        model, make_optimizer(cfg.optim, lr_scheduler), cfg.trainable_filter
+    )
+
+    state = nnx.state((model, optimizer))
+    state = jax.device_put(state, replicated_sharding)
+    nnx.update((model, optimizer), state)
+
+    ptrain_step = nnx.jit(
+        partial(train_step, cfg=cfg),
+    )
+
+    # Training loop
+    for step in range(0, cfg.optim.num_steps):
+        if cfg.log.profiler.enabled and step == cfg.log.profiler.start_step:
+            start_trace(cfg.log.profiler, step)
+
+        meter.reset()
+        meter.iter_tic()
+
+        with meter.timer("io"):
+            # Get next batch
+            while True:
+                data = next(dataloader)
+                if not jnp.isnan(data[0].img_feat).any():
+                    break
+
+        with meter.timer("fwd_bwd"):
+            # Perform training step
+            _, metrics = ptrain_step(model, optimizer, data, rngs)
+
+        with meter.timer("metrics"):
+            metrics = {
+                key: value.item() if isinstance(value, jnp.ndarray) else value
+                for key, value in metrics.items()
+            }
+            metrics["lr"] = lr_scheduler(step).item()
+            metrics["loss"] = {
+                key: value.item() for key, value in metrics["loss"].items()
+            }
+            metrics["prefetch"] = dataloader.prefetched()
+
+            # Log metrics
+            meter.iter_toc()
+            meter.update(metrics)
+            meter.log_iter_stats(step)
+
+        if cfg.log.profiler.enabled and step == cfg.log.profiler.stop_step:
+            stop_trace(cfg.log.profiler, step)
+
+        with meter.timer("save"):
+            # Save a checkpoint
+            if (step + 1) % cfg.log.save_freq == 0 or step == cfg.optim.num_steps - 1:
+                # Wait for the final checkpoint to complete
+                is_final_checkpoint = step == cfg.optim.num_steps - 1
+                # Capture the latest state of the model and optimizer
+                current_state = nnx.state((model, optimizer))
+                save_state(ckptr, current_state, step, wait=is_final_checkpoint)
+
+
+def read_cfg() -> TrainConfig:
+    cli_args = OmegaConf.from_cli()
+    default_cfg = OmegaConf.structured(TrainConfig())
+    cfg = OmegaConf.merge(default_cfg, cli_args)
+    print(OmegaConf.to_yaml(cfg))
+    cfg = OmegaConf.to_object(cfg)
+
+    # Dump config
+    os.makedirs(cfg.logdir, exist_ok=True)
+    with open(os.path.join(cfg.logdir, "config.yaml"), "w") as f:
+        OmegaConf.save(cfg, f)
+
+    return cfg
+
+
+if __name__ == "__main__":
+    cfg: TrainConfig = read_cfg()
+    train(cfg)

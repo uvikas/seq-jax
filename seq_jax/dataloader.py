@@ -211,13 +211,14 @@ class PrefetchLoader(Iterator):
         def _worker():
             for b in self._dl_iter:
                 # `b` is a pytree of torch.Tensors → numpy → sharded JAX arrays
-                b = jax.tree.map(
-                    lambda x: jax.make_array_from_process_local_data(
-                        sharding,
-                        x,
-                    ),
-                    b,
-                )
+                # b = jax.tree.map(
+                #     lambda x: jax.make_array_from_process_local_data(
+                #         sharding,
+                #         x,
+                #     ),
+                #     b,
+                # )
+                b = jax.tree.map(lambda x: jax.device_put(x, sharding), b)
                 self._queue.put(b)
             self._queue.put(self._sentinel)
 

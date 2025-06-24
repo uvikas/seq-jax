@@ -10,6 +10,7 @@ import shutil
 import tempfile
 
 from dataclasses import dataclass, asdict, field
+from jax.experimental import mesh_utils
 
 BATCH_AXIS = "data"
 FSDP_AXIS = "model"
@@ -141,8 +142,10 @@ def fsdp_sharding(
 
 
 def make_mesh(cfg: DistributedConfig):
-    devices = np.array(jax.devices()).reshape(cfg.mesh_shape)
-    mesh = jax.sharding.Mesh(devices, (BATCH_AXIS, FSDP_AXIS))
+    num_devices = jax.local_device_count()
+    mesh = jax.sharding.Mesh(
+        mesh_utils.create_device_mesh((num_devices,)), (BATCH_AXIS,)
+    )
     print(f"Created mesh {mesh=}")
     return mesh
 
