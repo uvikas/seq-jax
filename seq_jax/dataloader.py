@@ -200,7 +200,7 @@ class PrefetchLoader(Iterator):
         self,
         dataloader: Iterator[Any],
         sharding: jax.sharding.Sharding,
-        buffer_size: int = 32,
+        buffer_size: int = 5,
         num_workers: int = 4,
     ):
         self._dl_iter = iter(dataloader)
