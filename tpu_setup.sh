@@ -128,3 +128,8 @@ left_meter_modes=1 1 1
 right_meters=Tasks LoadAverage Uptime
 right_meter_modes=2 2 2
 EndOfFile
+
+# setup project dirs
+mkdir output
+mkdir pretrained
+gsutil -m cp -r gs://PRETRAINED_BUCKET/mae_pretrain_egosoup_vit_base pretrained/

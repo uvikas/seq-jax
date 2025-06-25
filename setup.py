@@ -9,5 +9,5 @@ setup(
     version="0.1.0",
     description="Multimodal sequence modeling in JAX",
     packages=find_packages(),
-    python_requires=">=3.12",
+    python_requires=">=3.10",
 )
