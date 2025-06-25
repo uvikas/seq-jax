@@ -37,6 +37,15 @@ class DistributedConfig:
 class EnvConfig:
     OMP_NUM_THREADS: str = "1"
     NCCL_DEBUG: str = "WARN"
+    LIBTPU_INIT_ARGS: str = (
+        "--xla_tpu_megacore_fusion_allow_ags=false "
+        "--xla_enable_async_collective_permute=true "
+        "--xla_tpu_enable_ag_backward_pipelining=true "
+        "--xla_tpu_enable_data_parallel_all_reduce_opt=true "
+        "--xla_tpu_data_parallel_opt_different_sized_ops=true "
+        "--xla_tpu_enable_async_collective_fusion=true "
+        "--xla_tpu_enable_async_collective_fusion_multiple_steps=true "
+    )
 
 
 def setup_env(cfg: EnvConfig):
