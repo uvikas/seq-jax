@@ -8,3 +8,4 @@ omegaconf
 pillow
 webdataset
 wandb
+fsspec

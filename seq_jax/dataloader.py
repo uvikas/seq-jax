@@ -12,6 +12,7 @@ import queue
 import threading
 import torch
 import webdataset as wds
+import fsspec  # type: ignore
 
 from dataclasses import dataclass, field
 from jax.sharding import Sharding
@@ -376,100 +377,69 @@ def _validate_sample(sample):
     )
 
 
-def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDataset:
-    import subprocess
-    from urllib.parse import urlparse
+def _glob_shards(dataset_root: str, dataset_names: List[str]) -> List[str]:
+    """Return a list of shard paths for ``webdataset``.
 
-    def _is_gcs_path(path: str) -> bool:
-        """Check if path is a Google Cloud Storage path."""
-        return path.startswith("gs://")
+    This helper is capable of dealing with both local file systems and Google
+    Cloud Storage (``gs://``) buckets. Additional filesystems supported by
+    ``fsspec`` can be added transparently in the future.
 
-    def _list_gcs_shards(gcs_path: str) -> List[str]:
-        """List shard files in GCS using gsutil."""
-        try:
-            # Use gsutil to list files matching the pattern
-            cmd = ["gsutil", "ls", f"{gcs_path}/*/shard-*.tar"]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return [
-                line.strip()
-                for line in result.stdout.strip().split("\n")
-                if line.strip()
-            ]
-        except subprocess.CalledProcessError:
-            # If the exact pattern fails, try a broader search and filter
-            try:
-                cmd = ["gsutil", "ls", "-r", gcs_path]
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                all_files = [
-                    line.strip()
-                    for line in result.stdout.strip().split("\n")
-                    if line.strip()
-                ]
-                # Filter for shard files
-                return [f for f in all_files if "/shard-" in f and f.endswith(".tar")]
-            except subprocess.CalledProcessError:
-                return []
+    Args:
+        dataset_root: Root directory or bucket containing the dataset.
+        dataset_names: List of glob-style patterns (e.g. "*", "task_*" …).
 
-    def _list_gcs_directories(gcs_path: str) -> List[str]:
-        """List directories in GCS."""
-        try:
-            cmd = ["gsutil", "ls", "-d", f"{gcs_path}/*/"]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            dirs = [
-                line.strip().rstrip("/")
-                for line in result.stdout.strip().split("\n")
-                if line.strip()
-            ]
-            return [os.path.basename(d) for d in dirs]
-        except subprocess.CalledProcessError:
-            return []
+    Returns:
+        A list of fully-qualified paths matching ``*/shard-*.tar`` under every
+        dataset name provided.
+    """
+    if dataset_root.startswith("gs://"):
+        fs = fsspec.filesystem("gcs")
+        shards: List[str] = []
+        for name in dataset_names:
+            pattern = f"{dataset_root.rstrip('/')}/{name}/*/shard-*.tar"
+            shards.extend(fs.glob(pattern))
 
-    # Determine if we're working with GCS or local paths
-    if _is_gcs_path(cfg.dataset_root):
-        # Handle GCS paths
-        roots = []
-        names = []
+        shards = [p if p.startswith("gs://") else f"gs://{p}" for p in shards]
+        return shards
 
-        for dataset_name in cfg.dataset_names:
-            if dataset_name == "*":
-                # List all directories in the root
-                all_dirs = _list_gcs_directories(cfg.dataset_root)
-                for dir_name in all_dirs:
-                    gcs_pattern = f"{cfg.dataset_root}/{dir_name}"
-                    shards = _list_gcs_shards(gcs_pattern)
-                    roots.extend(shards)
-                    if shards:  # Only add to names if we found shards
-                        names.append(dir_name)
-            else:
-                # Specific dataset name
-                gcs_pattern = f"{cfg.dataset_root}/{dataset_name}"
-                shards = _list_gcs_shards(gcs_pattern)
-                roots.extend(shards)
-                if shards:  # Only add to names if we found shards
-                    names.append(dataset_name)
+    shards: List[str] = []
+    for name in dataset_names:
+        shards.extend(glob(os.path.join(dataset_root, name, "*", "shard-*.tar")))
+    return shards
+
+
+def _discover_dataset_names(dataset_root: str, dataset_names: List[str]) -> List[str]:
+    """Discover dataset folders for pretty logging.
+
+    When the root lives on GCS we again use ``fsspec``; otherwise we fall back
+    to ``glob`` from the standard library. The returned list is sorted to keep
+    the log output deterministic.
+    """
+    if dataset_root.startswith("gs://"):
+        fs = fsspec.filesystem("gcs")
+        names: List[str] = []
+        for name in dataset_names:
+            pattern = f"{dataset_root.rstrip('/')}/{name}"
+            names.extend(fs.glob(pattern))
+        names = [os.path.basename(n.rstrip("/")) for n in names]
     else:
-        # Handle local filesystem paths (original logic)
-        roots = []
-        for dataset_name in cfg.dataset_names:
-            pattern = os.path.join(cfg.dataset_root, dataset_name, "*", "shard-*.tar")
-            matches = glob(pattern)
-            roots.extend(matches)
+        paths = [glob(os.path.join(dataset_root, pattern)) for pattern in dataset_names]
+        names = [os.path.basename(p) for sub in paths for p in sub]
 
-        names = []
-        for dataset_name in cfg.dataset_names:
-            pattern = os.path.join(cfg.dataset_root, dataset_name)
-            matches = glob(pattern)
-            names.extend([os.path.basename(item) for item in matches])
+    return sorted(names, key=lambda x: x.split("_")[-1])
 
-    assert (
-        len(roots) > 0
-    ), f"No shards found in {cfg.dataset_root} with datasets {cfg.dataset_names}"
+
+def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDataset:
+    roots = _glob_shards(cfg.dataset_root, cfg.dataset_names)
+    if len(roots) == 0:
+        raise FileNotFoundError(
+            f"No shards found under root='{cfg.dataset_root}' with patterns {cfg.dataset_names}."
+        )
+
     np.random.shuffle(roots)
-
     print("Webdataset using", len(roots), "shards")
 
-    # Sort names consistently
-    names = sorted(set(names), key=lambda x: x.split("_")[-1] if "_" in x else x)
+    names = _discover_dataset_names(cfg.dataset_root, cfg.dataset_names)
     print(f"Dataset ({len(names)})", names)
 
     dataset = wds.WebDataset(
