@@ -547,12 +547,6 @@ class VisionEncoderConfig:
 
 
 class VisionEncoder(nnx.Module):
-    """
-    NNX Vision Transformer encoder wrapper.
-    Instantiates a ViT backbone and handles configuration.
-    Freezing is handled externally via optimizer configuration.
-    """
-
     def __init__(
         self,
         cfg: VisionEncoderConfig,
@@ -560,23 +554,10 @@ class VisionEncoder(nnx.Module):
         **kwargs,
     ):
         self.name = cfg.name
-        pretrain_path = "none"
-        if cfg.pretrain_dir and cfg.name in _MODELS:
-            path = os.path.join(cfg.pretrain_dir, _MODELS[cfg.name])
-            if os.path.exists(path):
-                pretrain_path = path
-            else:
-                print(
-                    f"Warning: Pretrain path not found: {path}. Training from scratch."
-                )
-        elif cfg.name not in _MODELS and cfg.name not in [
-            "regnet_y_3_2gf",
-            "regnet_y_16gf",
-            "regnet_y_800mf",
-        ]:
-            print(
-                f"Warning: Model name '{cfg.name}' not in known models or RegNets. Assuming scratch training."
-            )
+        assert cfg.name in _MODELS, f"Unknown model name: {cfg.name}"
+        path = os.path.join(cfg.pretrain_dir, _MODELS[cfg.name])
+        assert os.path.exists(path), f"Pretrain path not found: {path}"
+        pretrain_path = os.path.abspath(path)
 
         match cfg.name:
             case "vitb-mae-egosoup":
