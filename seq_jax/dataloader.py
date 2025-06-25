@@ -410,13 +410,13 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
             .map(
                 partial(
                     slide,
-                    context_len=cfg.actor.context_len,
-                    action_len=cfg.actor.action_len,
+                    context_len=context_len,
+                    action_len=pred_len,
                 )
             )
             .unlisted()
-            .shuffle(cfg.train.shufflebuffer)
-            .batched(cfg.train.mb_size // cfg.num_gpus, partial=False)
+            .shuffle(cfg.shufflebuffer)
+            .batched(cfg.global_batch_size // jax.process_count())
         )
     else:
         dataset = (
