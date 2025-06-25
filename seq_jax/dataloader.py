@@ -377,24 +377,99 @@ def _validate_sample(sample):
 
 
 def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDataset:
-    roots = [
-        glob(os.path.join(cfg.dataset_root, dataset_name, "*", "shard-*.tar"))
-        for dataset_name in cfg.dataset_names
-    ]
-    roots = [item for sublist in roots for item in sublist]
-    assert len(roots) > 0, f"No shards found in {cfg.dataset_root} {cfg.dataset_names}"
+    import subprocess
+    from urllib.parse import urlparse
+
+    def _is_gcs_path(path: str) -> bool:
+        """Check if path is a Google Cloud Storage path."""
+        return path.startswith("gs://")
+
+    def _list_gcs_shards(gcs_path: str) -> List[str]:
+        """List shard files in GCS using gsutil."""
+        try:
+            # Use gsutil to list files matching the pattern
+            cmd = ["gsutil", "ls", f"{gcs_path}/*/shard-*.tar"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return [
+                line.strip()
+                for line in result.stdout.strip().split("\n")
+                if line.strip()
+            ]
+        except subprocess.CalledProcessError:
+            # If the exact pattern fails, try a broader search and filter
+            try:
+                cmd = ["gsutil", "ls", "-r", gcs_path]
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                all_files = [
+                    line.strip()
+                    for line in result.stdout.strip().split("\n")
+                    if line.strip()
+                ]
+                # Filter for shard files
+                return [f for f in all_files if "/shard-" in f and f.endswith(".tar")]
+            except subprocess.CalledProcessError:
+                return []
+
+    def _list_gcs_directories(gcs_path: str) -> List[str]:
+        """List directories in GCS."""
+        try:
+            cmd = ["gsutil", "ls", "-d", f"{gcs_path}/*/"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            dirs = [
+                line.strip().rstrip("/")
+                for line in result.stdout.strip().split("\n")
+                if line.strip()
+            ]
+            return [os.path.basename(d) for d in dirs]
+        except subprocess.CalledProcessError:
+            return []
+
+    # Determine if we're working with GCS or local paths
+    if _is_gcs_path(cfg.dataset_root):
+        # Handle GCS paths
+        roots = []
+        names = []
+
+        for dataset_name in cfg.dataset_names:
+            if dataset_name == "*":
+                # List all directories in the root
+                all_dirs = _list_gcs_directories(cfg.dataset_root)
+                for dir_name in all_dirs:
+                    gcs_pattern = f"{cfg.dataset_root}/{dir_name}"
+                    shards = _list_gcs_shards(gcs_pattern)
+                    roots.extend(shards)
+                    if shards:  # Only add to names if we found shards
+                        names.append(dir_name)
+            else:
+                # Specific dataset name
+                gcs_pattern = f"{cfg.dataset_root}/{dataset_name}"
+                shards = _list_gcs_shards(gcs_pattern)
+                roots.extend(shards)
+                if shards:  # Only add to names if we found shards
+                    names.append(dataset_name)
+    else:
+        # Handle local filesystem paths (original logic)
+        roots = []
+        for dataset_name in cfg.dataset_names:
+            pattern = os.path.join(cfg.dataset_root, dataset_name, "*", "shard-*.tar")
+            matches = glob(pattern)
+            roots.extend(matches)
+
+        names = []
+        for dataset_name in cfg.dataset_names:
+            pattern = os.path.join(cfg.dataset_root, dataset_name)
+            matches = glob(pattern)
+            names.extend([os.path.basename(item) for item in matches])
+
+    assert (
+        len(roots) > 0
+    ), f"No shards found in {cfg.dataset_root} with datasets {cfg.dataset_names}"
     np.random.shuffle(roots)
 
     print("Webdataset using", len(roots), "shards")
 
-    names = [
-        glob(os.path.join(cfg.dataset_root, dataset_name))
-        for dataset_name in cfg.dataset_names
-    ]
-    names = sorted(
-        [os.path.basename(item) for sublist in names for item in sublist],
-        key=lambda x: x.split("_")[-1],
-    )
+    # Sort names consistently
+    names = sorted(set(names), key=lambda x: x.split("_")[-1] if "_" in x else x)
     print(f"Dataset ({len(names)})", names)
 
     dataset = wds.WebDataset(
