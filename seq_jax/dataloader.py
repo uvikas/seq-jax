@@ -306,52 +306,36 @@ class TorchDataLoader:
                 yield batch
 
 
-def random_segmenter(ctx_len: int, action_len: int):
-    """
-    sample = (vision, state, action)
-    vision : (T, …)  torch.Tensor / np.ndarray
-    state  : (T, …)
-    action : (T, …)
+def slide(sample, context_len: int, action_len: int):
+    """Turn one contiguous sample into 16-frame samples."""
+    vision, state, action, json = sample
+    ar_mask = np.zeros(vision.shape[0])
 
-    Returns the same tuple but with the first dimension cropped to
-    `seg_len`.  A new random start index is drawn for every sample.
-    """
+    if json["begin"]:
+        pad_len = context_len - 1
+        vision = np.concatenate([np.array([vision[0]] * pad_len), vision], axis=0)
+        state = np.concatenate([np.array([state[0]] * pad_len), state], axis=0)
+        action = np.concatenate([np.array([action[0]] * pad_len), action], axis=0)
+        ar_mask = np.concatenate([np.array([1] * pad_len), ar_mask], axis=0)
 
-    def _fn(sample):
-        vision, state, action, json = sample  # <- unpack
-        steps = vision.shape[0]  # total time-steps
-
-        if json["begin"]:
-            start = np.random.randint(-ctx_len + 1, steps - ctx_len - action_len + 1)
-            if start < 0:
-                pad = -start
-                start = 0
-            else:
-                pad = 0
-        else:
-            pad = 0
-            start = np.random.randint(0, steps - ctx_len - action_len + 1)
-        end = start + ctx_len + action_len - pad
-
-        vision = vision[start:end]
-        state = state[start:end]
-        action = action[start:end]
-        ar_mask = np.zeros(end - start)
-
-        if pad > 0:
-            vision = np.concatenate([np.array([vision[0]] * pad), vision], axis=0)
-            state = np.concatenate([np.array([state[0]] * pad), state], axis=0)
-            action = np.concatenate([np.array([action[0]] * pad), action], axis=0)
-            ar_mask = np.concatenate([np.array([1] * pad), ar_mask], axis=0)
-
-        assert vision.shape[0] == ctx_len + action_len
-        assert state.shape[0] == ctx_len + action_len
-        assert action.shape[0] == ctx_len + action_len
-        assert ar_mask.shape[0] == ctx_len + action_len
-
-        return (vision, state, action, ar_mask)
-
-    return _fn
+    # torch.unfold / as_strided is fastest, but a plain loop
+    # is easier to read and plenty fast for 100 frames.
+    samples = []
+    for i in range(vision.shape[0] - context_len + 1 - (action_len - 1)):
+        start, end = i, i + context_len + action_len - 1
+        assert vision[start:end].shape[0] == context_len + action_len - 1
+        assert state[start:end].shape[0] == context_len + action_len - 1
+        assert action[start:end].shape[0] == context_len + action_len - 1
+        assert ar_mask[start:end].shape[0] == context_len + action_len - 1
+        samples.append(
+            (
+                vision[start:end],
+                state[start:end],
+                action[start:end],
+                ar_mask[start:end],
+            )
+        )
+    return samples
 
 
 def _ctx_slice(x, context_len):
@@ -362,36 +346,8 @@ def _pred_slice(x, context_len, pred_len):
     return x[: context_len + pred_len - 1]
 
 
-def _validate_sample(sample):
-    """Validate that the sample doesn't contain any NaN/Inf values."""
-    vision, state, action, mask = sample
-    return (
-        not np.isnan(vision).any()
-        and not np.isnan(state).any()
-        and not np.isnan(action).any()
-        and not np.isnan(mask).any()
-        and not np.isinf(vision).any()
-        and not np.isinf(state).any()
-        and not np.isinf(action).any()
-        and not np.isinf(mask).any()
-    )
-
-
 def _glob_shards(dataset_root: str, dataset_names: List[str]) -> List[str]:
-    """Return a list of shard paths for ``webdataset``.
-
-    This helper is capable of dealing with both local file systems and Google
-    Cloud Storage (``gs://``) buckets. Additional filesystems supported by
-    ``fsspec`` can be added transparently in the future.
-
-    Args:
-        dataset_root: Root directory or bucket containing the dataset.
-        dataset_names: List of glob-style patterns (e.g. "*", "task_*" …).
-
-    Returns:
-        A list of fully-qualified paths matching ``*/shard-*.tar`` under every
-        dataset name provided.
-    """
+    """Return a list of shard paths."""
     if dataset_root.startswith("gs://"):
         fs = fsspec.filesystem("gcs")
         shards: List[str] = []
@@ -409,12 +365,7 @@ def _glob_shards(dataset_root: str, dataset_names: List[str]) -> List[str]:
 
 
 def _discover_dataset_names(dataset_root: str, dataset_names: List[str]) -> List[str]:
-    """Discover dataset folders for pretty logging.
-
-    When the root lives on GCS we again use ``fsspec``; otherwise we fall back
-    to ``glob`` from the standard library. The returned list is sorted to keep
-    the log output deterministic.
-    """
+    """Discover dataset folders for logging."""
     if dataset_root.startswith("gs://"):
         fs = fsspec.filesystem("gcs")
         names: List[str] = []
@@ -452,17 +403,20 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
 
     if cfg.chunked:
         dataset = (
-            dataset.shuffle(cfg.shufflebuffer)
-            .decode("torch")
+            dataset.decode("torch")
             .repeat()
             .to_tuple("vision.npy", "state.npy", "action.npy", "json")
-            .select(
-                lambda sample: sample[0].shape[0]
-                >= cfg.actor.context_len + cfg.actor.action_len
+            .shuffle(512)
+            .map(
+                partial(
+                    slide,
+                    context_len=cfg.actor.context_len,
+                    action_len=cfg.actor.action_len,
+                )
             )
-            .map(random_segmenter(cfg.actor.context_len, cfg.actor.action_len))
-            .select(_validate_sample)
-            .batched(cfg.global_batch_size // jax.process_count())
+            .unlisted()
+            .shuffle(cfg.train.shufflebuffer)
+            .batched(cfg.train.mb_size // cfg.num_gpus, partial=False)
         )
     else:
         dataset = (
@@ -476,7 +430,6 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
                 partial(_pred_slice, context_len=context_len, pred_len=pred_len),
                 partial(_ctx_slice, context_len=context_len),
             )
-            .select(_validate_sample)
             .batched(cfg.global_batch_size // jax.process_count())
         )
     return dataset
