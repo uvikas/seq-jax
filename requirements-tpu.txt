@@ -1,0 +1,10 @@
+jax[tpu]
+flax
+optax
+orbax-checkpoint
+torch
+tensorflow
+omegaconf
+pillow
+webdataset
+wandb
