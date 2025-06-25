@@ -10,8 +10,8 @@ sudo apt-get update && sudo apt-get install -y \
 
 # Update pip
 pip install --upgrade pip
-
 pip install --upgrade -r requirements-tpu.txt
+pip install -e .
 
 # vim configurations
 cat > $HOME/.vimrc <<- EndOfFile
