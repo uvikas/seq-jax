@@ -15,6 +15,7 @@ import torch
 
 from dataclasses import dataclass, field
 from flax import nnx, struct
+from flax import jax_utils
 from functools import partial
 from jax.sharding import PartitionSpec as P
 from omegaconf import OmegaConf
@@ -209,6 +210,11 @@ def train_step(
     grad_fn = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)
     (loss, loss_dict), grads = grad_fn(model, rng, obs, pred)
 
+    # Average loss and gradients across devices (data-parallel)
+    loss = jax.lax.pmean(loss, axis_name="data")
+    loss_dict = jax.tree.map(lambda v: jax.lax.pmean(v, axis_name="data"), loss_dict)
+    grads = jax.lax.pmean(grads, axis_name="data")
+
     params = state.params.filter(cfg.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
     new_params = optax.apply_updates(params, updates)
@@ -235,6 +241,8 @@ def train_step(
         "lr": lr_scheduler(state.step),
         "batch_size": obs.state.shape[0],
     }
+
+    metrics = jax.tree.map(lambda x: jax.lax.pmean(x, axis_name="data"), metrics)
 
     new_state = dataclasses.replace(
         state,
@@ -279,22 +287,36 @@ def train(cfg: TrainConfig):
     if cfg.resume:
         state = restore_state(ckptr, state)
 
-    ptrain_step = jax.jit(
-        partial(
-            train_step,
-            lr_scheduler=lr_scheduler,
-            cfg=cfg,
-        ),
-        in_shardings=(state_sharding, data_sharding, replicated_sharding),
-        out_shardings=(state_sharding, replicated_sharding),
-        # donate_argnums=(0, 1),
+    # Replicate state across devices for pmap
+    state = jax_utils.replicate(state)
+
+    # pmap over the leading device axis "data"
+    ptrain_step = jax.pmap(
+        partial(train_step, lr_scheduler=lr_scheduler, cfg=cfg),
+        axis_name="data",
+        donate_argnums=(0,),
     )
 
-    # Pre-generate RNG keys
     step_rngs = jax.random.split(train_rng, cfg.optim.num_steps)
 
+    num_devices = jax.local_device_count()
+
+    def shard_batch(batch):
+        """Reshape leading batch dim to [num_devices, per_device, ...] for pmap."""
+
+        def _reshape(x):
+            if hasattr(x, "shape") and x.shape and x.shape[0] % num_devices == 0:
+                per_dev = x.shape[0] // num_devices
+                new_shape = (num_devices, per_dev) + x.shape[1:]
+                return x.reshape(new_shape)
+            return x
+
+        return jax.tree.map(_reshape, batch)
+
+    global_step_start = int(jax_utils.unreplicate(state).step)
+
     # Training loop
-    for step in range(state.step, cfg.optim.num_steps):
+    for step in range(global_step_start, cfg.optim.num_steps):
         if cfg.log.profiler.enabled and step == cfg.log.profiler.start_step:
             start_trace(cfg.log.profiler, step)
 
@@ -308,11 +330,21 @@ def train(cfg: TrainConfig):
                 if not jnp.isnan(data[0].img_feat).any():
                     break
 
+            # Reshape batch for data parallelism
+            data = shard_batch(data)
+
+        # Prepare per-device RNG for this step
+        step_rng = jax.random.split(step_rngs[step], num_devices)
+
         with meter.timer("fwd_bwd"):
             # Perform training step
-            state, metrics = ptrain_step(state, data, step_rngs[step])
+            state, metrics = ptrain_step(state, data, step_rng)
 
         with meter.timer("metrics"):
+            metrics = jax.tree.map(
+                lambda x: x[0] if isinstance(x, jnp.ndarray) else x, metrics
+            )
+
             metrics = {
                 key: value.item() if isinstance(value, jnp.ndarray) else value
                 for key, value in metrics.items()
@@ -331,11 +363,16 @@ def train(cfg: TrainConfig):
             stop_trace(cfg.log.profiler, step)
 
         with meter.timer("save"):
-            # Save a checkpoint
+            # Save a checkpoint periodically or at the end
             if (step + 1) % cfg.log.save_freq == 0 or step == cfg.optim.num_steps - 1:
-                # Wait for the final checkpoint to complete
                 is_final_checkpoint = step == cfg.optim.num_steps - 1
-                save_state(ckptr, state, step, wait=is_final_checkpoint)
+                # Save a single (unreplicated) copy of the state
+                save_state(
+                    ckptr,
+                    jax_utils.unreplicate(state),
+                    step,
+                    wait=is_final_checkpoint,
+                )
 
 
 def read_cfg() -> TrainConfig:

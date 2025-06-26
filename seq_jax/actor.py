@@ -117,6 +117,7 @@ class TransformerConcatActor(nnx.Module):
             use_bias=False,
             use_scale=False,
             use_fast_variance=False,
+            axis_name="data",
             rngs=rngs,
         )
 

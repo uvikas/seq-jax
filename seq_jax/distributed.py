@@ -46,6 +46,7 @@ class EnvConfig:
         "--xla_tpu_enable_async_collective_fusion=true "
         "--xla_tpu_enable_async_collective_fusion_multiple_steps=true "
     )
+    JAX_TRACEBACK_FILTERING: str = "off"
 
 
 def setup_env(cfg: EnvConfig):
