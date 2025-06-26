@@ -34,7 +34,7 @@ set -g default-terminal "tmux-256color"
 set -g base-index 1
 setw -g pane-base-index 1
 
-set -g prefix C-a
+set -g prefix C-b
 
 set -g set-titles on
 set -g set-titles-string '#(whoami)::#h::#(curl ipecho.net/plain;echo)'
