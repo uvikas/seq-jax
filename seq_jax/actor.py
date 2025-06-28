@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from dataclasses import dataclass, field
 from flax import nnx
 
+from seq_jax.distributed import activation_sharding_constraint
 from seq_jax.policy import (
     TransformerConcatPolicy,
     TransformerConcatPolicyConfig,
@@ -193,12 +194,15 @@ class TransformerConcatActor(nnx.Module):
             ],
             axis=-1,
         )
+        obs_cat = activation_sharding_constraint(obs_cat)
         # (B, T, D) -> (T, B, D)
-        obs_cat = obs_cat.transpose(1, 0, 2)
-        obs_cat = self.normalize_traj(obs_cat)
+        #obs_cat = obs_cat.transpose(1, 0, 2)
+        #obs_cat = self.normalize_traj(obs_cat)
 
         # Predict actions + compute loss
         pred_act = self.policy(obs_cat, attn_mask, rngs=rngs)
+        pred_act = activation_sharding_constraint(pred_act)
+
         loss = jnp.mean(jnp.square(pred_act.action - pred.action))
         loss_dict = {
             "action_loss": loss,

@@ -91,7 +91,12 @@ def make_train_state(
     params = nnx.state(model)
     graphdef = nnx.graphdef(model)
 
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    params = jax.device_put(params, replicated_sharding)
+    nnx.update(model, params)
+
     # Filter frozen parameters
+    params = nnx.state(model)
     trainable_params = params.filter(cfg.trainable_filter)
     frozen_params = params.filter(cfg.frozen_filter)
     print(
@@ -103,6 +108,7 @@ def make_train_state(
             ]
         ),
     )
+    opt_state = tx.init(trainable_params)
 
     # Count number of params
     encoder_params = sum(
@@ -119,8 +125,6 @@ def make_train_state(
     print(f"Query pool params: {query_pool_params / 1e6:.2f}M")
     print(f"Policy params: {policy_params / 1e6:.2f}M")
 
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    opt_state = tx.init(trainable_params)
     state = TrainState(
         step=0,
         params=params,
@@ -130,9 +134,6 @@ def make_train_state(
         ema_alpha=cfg.optim.ema_alpha,
         ema_params=params,
     )
-
-    state = jax.device_put(state, replicated_sharding)
-    nnx.update(model, state.params)
 
     return state, replicated_sharding
 
@@ -310,7 +311,8 @@ def train(cfg: TrainConfig):
 
         with meter.timer("fwd_bwd"):
             # Perform training step
-            state, metrics = ptrain_step(state, data, step_rngs[step])
+            with set_mesh(mesh):
+                state, metrics = ptrain_step(state, data, step_rngs[step])
 
         with meter.timer("metrics"):
             metrics = {

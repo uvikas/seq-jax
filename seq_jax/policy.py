@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from flax import nnx, struct
 from functools import partial
 
+from seq_jax.distributed import activation_sharding_constraint
+
 ################################################################################
 #                                                                              #
 #                                 Inputs and Outputs                           #
@@ -334,6 +336,7 @@ class TransformerEncoderBlock(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> jax.Array:
+        x = activation_sharding_constraint(x)
         x_p = self.ln_1(x)
         x_p = self.attention(
             x_p,
@@ -342,9 +345,11 @@ class TransformerEncoderBlock(nnx.Module):
             mask=~attn_mask,
             rngs=rngs,
         )
+        #x_p = activation_sharding_constraint(x)
 
         x = x + x_p
         x_p = self.mlp_block(self.ln_2(x), rngs=rngs)
+        #x_p = activation_sharding_constraint(x_p)
         return x + x_p
 
 
@@ -504,12 +509,12 @@ class TransformerConcatPolicy(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> Prediction:
-        # (B, T, 3*C + D + D)
-
+        # (T, B, 3*C + D + D)
         x = self.in_proj1(obs, rngs=rngs)
         x = self.act(x)
         x = self.in_proj2(x, rngs=rngs)
-        x = x.transpose(1, 0, 2)
+        # (T, B, d) -> (B, T, d)
+        #x = x.transpose(1, 0, 2)
         x = x + self.pos_embed
         x = self.encoder(x, attn_mask, rngs=rngs)
 
