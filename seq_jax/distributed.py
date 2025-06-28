@@ -156,6 +156,17 @@ def make_mesh(cfg: DistributedConfig):
     return mesh
 
 
+def activation_sharding_constraint(pytree):
+    if _MeshState.active_mesh is None:
+        return pytree
+    return jax.lax.with_sharding_constraint(
+        pytree,
+        jax.sharding.NamedSharding(
+            _MeshState.active_mesh, jax.sharding.PartitionSpec(BATCH_AXIS)
+        ),
+    )
+
+
 @contextlib.contextmanager
 def set_mesh(mesh: jax.sharding.Mesh):
     """Plumbing the mesh deep into the module tree is extremeley cumbersome; until the JAX team lands a better API, a

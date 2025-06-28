@@ -430,7 +430,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
                 partial(_pred_slice, context_len=context_len, pred_len=pred_len),
                 partial(_ctx_slice, context_len=context_len),
             )
-            .batched(cfg.global_batch_size // jax.process_count())
+            .batched(cfg.global_batch_size // jax.process_count(), partial=False)
         )
     return dataset
 

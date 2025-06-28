@@ -195,14 +195,6 @@ class QueryPool(nnx.Module):
         self.act = partial(nnx.gelu, approximate=False)
         self.proj_drop = nnx.Dropout(rate=drop)
 
-        # MLP head
-        self.mlp = MLP(
-            input_dim * num_query,
-            output_dim,
-            [output_dim * 4],
-            rngs=rngs,
-        )
-
     def __call__(self, im_emb: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
         """
         im_emb: [batch, T, N, C]  (C == input_dim)
@@ -238,7 +230,7 @@ class QueryPool(nnx.Module):
         out = self.proj_1(out)
         out = self.act(out)
         out = self.proj_2(out)
-        out = self.proj_drop(out)
+        out = self.proj_drop(out, rngs=rngs)
 
         return out
 
