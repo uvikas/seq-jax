@@ -100,6 +100,15 @@ def make_train_state(
     trainable_params = params.filter(cfg.trainable_filter)
     frozen_params = params.filter(cfg.frozen_filter)
     print(
+        "Train params: "
+        + ", ".join(
+            [
+                ".".join([str(it) for it in path_tuple])
+                for path_tuple in trainable_params.flat_state().paths
+            ]
+        ),
+    )
+    print(
         "Frozen params: "
         + ", ".join(
             [
@@ -338,6 +347,9 @@ def train(cfg: TrainConfig):
                 # Wait for the final checkpoint to complete
                 is_final_checkpoint = step == cfg.optim.num_steps - 1
                 save_state(ckptr, state, step, wait=is_final_checkpoint)
+        
+        if (step + 1) == 3000:
+            break
 
 
 def read_cfg() -> TrainConfig:

@@ -336,7 +336,7 @@ class TransformerEncoderBlock(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> jax.Array:
-        x = activation_sharding_constraint(x)
+        #x = activation_sharding_constraint(x)
         x_p = self.ln_1(x)
         x_p = self.attention(
             x_p,
@@ -532,6 +532,106 @@ class TransformerConcatPolicy(nnx.Module):
             return Prediction(img_pooled=img_pooled, state=state, action=action)
         else:
             x = self.out_proj(x, rngs=rngs)
+            splits = jnp.split(x, self.split_output, axis=-1)
+            img_pooled, state, action = splits[:3], splits[3], splits[4]
+            return Prediction(
+                img_pooled=[jnp.expand_dims(img, axis=2) for img in img_pooled],
+                state=jnp.expand_dims(state, axis=2),
+                action=jnp.expand_dims(action, axis=2),
+            )
+
+class BootlegTransformerConcatPolicy(nnx.Module):
+    """Transformer-based policy."""
+
+    def __init__(
+        self,
+        context_len: int,
+        pred_len: int,
+        inp_dims: List[int],
+        out_dims: List[int],
+        cfg: TransformerConcatPolicyConfig,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.context_len = context_len
+        self.pred_len = pred_len
+        self.multihead_proj = cfg.multihead_proj
+
+        self.input_dim = tuple(inp_dims)
+        self.output_dim = tuple(out_dims)
+        # Must be static tuple
+        self.split_output = tuple(np.array(out_dims).cumsum())
+
+        self.in_proj1 = MLP(
+            sum(self.input_dim),
+            cfg.embed_dim,
+            cfg.in_proj_hidden_sizes,
+            stable_init=False,
+            rngs=rngs,
+        )
+        self.act = partial(nnx.gelu, approximate=False)
+
+        self.pos_embed = nnx.Variable(
+            jnp.expand_dims(get_1d_sincos_pos_embed(cfg.embed_dim, context_len), axis=0)
+        )
+
+        self.encoder = TransformerEncoder(
+            cfg.num_blocks,
+            cfg.embed_dim,
+            cfg.num_heads,
+            int(cfg.embed_dim * cfg.mlp_ratio),
+            cfg.attn_dropout,
+            cfg.mlp_dropout,
+            cfg.last_layer_norm,
+            rngs=rngs,
+        )
+
+        if cfg.multihead_proj:
+            self.out_proj = [
+                MLP(
+                    cfg.embed_dim,
+                    sum(self.output_dim[-1:]),
+                    cfg.head_hidden_sizes,
+                    stable_init=False,
+                    rngs=rngs,
+                )
+                for _ in range(pred_len)
+            ]
+        else:
+            self.out_proj = MLP(
+                sum(self.input_dim),
+                sum(self.output_dim),
+                #cfg.head_hidden_sizes,
+                [256, 256],
+                stable_init=False,
+                rngs=rngs,
+            )
+
+    def __call__(
+        self,
+        obs: jnp.array,
+        attn_mask: jnp.ndarray,
+        *,
+        rngs: nnx.Rngs,
+    ) -> Prediction:
+        #x = self.in_proj1(obs, rngs=rngs)
+        #x = x + self.pos_embed
+        #x = self.encoder(x, attn_mask, rngs=rngs)
+
+        if self.multihead_proj:
+            img_pooled, state, action = [], [], []
+            for proj in self.out_proj:
+                out = proj(x)
+                splits = jnp.split(out, self.split_output, axis=-1)
+                img_pooled.append(splits[:3])
+                state.append(splits[3])
+                action.append(splits[4])
+            img_pooled = jnp.stack(img_pooled, axis=1)
+            state = jnp.stack(state, axis=1)
+            action = jnp.stack(action, axis=1)
+            return Prediction(img_pooled=img_pooled, state=state, action=action)
+        else:
+            x = self.out_proj(obs, rngs=rngs)
             splits = jnp.split(x, self.split_output, axis=-1)
             img_pooled, state, action = splits[:3], splits[3], splits[4]
             return Prediction(

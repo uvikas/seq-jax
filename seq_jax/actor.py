@@ -9,10 +9,12 @@ from flax import nnx
 from seq_jax.distributed import activation_sharding_constraint
 from seq_jax.policy import (
     TransformerConcatPolicy,
+    BootlegTransformerConcatPolicy,
     TransformerConcatPolicyConfig,
     Observation,
     Prediction,
     QueryPool,
+    MLP,
 )
 from seq_jax.vit import VisionEncoder, VisionEncoderConfig, normalize
 
@@ -85,6 +87,20 @@ def make_attn_mask(
     return attn
 
 
+class TempEncoder(nnx.Module):
+
+    def __init__(self,ctx,pred,inp_dims,out_dims,cfg,rngs):
+        self.ctx = ctx
+        self.mlp = MLP(ctx*sum(inp_dims), ctx*sum(out_dims), stable_init=False, rngs=rngs)
+
+    def __call__(self,x,*,rngs):
+        # (b, t, d) -> (b, t*d)
+        inp = jnp.reshape(x, (x.shape[0], -1))
+        # (b, t*d) -> (b, t*d_out)
+        out = self.mlp(inp, rngs=rngs)
+        ret = jnp.reshape(out, (out.shape[0],self.ctx,1,-1))
+        return ret
+
 class TransformerConcatActor(nnx.Module):
     """Transformer concat actor."""
 
@@ -121,7 +137,7 @@ class TransformerConcatActor(nnx.Module):
             rngs=rngs,
         )
 
-        self.policy = TransformerConcatPolicy(
+        self.policy = BootlegTransformerConcatPolicy(
             cfg.context_len,
             cfg.pred_len,
             inp_dims[:-1],
@@ -194,14 +210,15 @@ class TransformerConcatActor(nnx.Module):
             ],
             axis=-1,
         )
-        obs_cat = activation_sharding_constraint(obs_cat)
+        #obs_cat = activation_sharding_constraint(obs_cat)
         # (B, T, D) -> (T, B, D)
         #obs_cat = obs_cat.transpose(1, 0, 2)
         #obs_cat = self.normalize_traj(obs_cat)
 
         # Predict actions + compute loss
         pred_act = self.policy(obs_cat, attn_mask, rngs=rngs)
-        pred_act = activation_sharding_constraint(pred_act)
+        #pred_act = self.policy(obs_cat, rngs=rngs)
+        #pred_act = activation_sharding_constraint(pred_act)
 
         loss = jnp.mean(jnp.square(pred_act.action - pred.action))
         loss_dict = {
@@ -214,8 +231,11 @@ class TransformerConcatActor(nnx.Module):
         }
         return loss, loss_dict
 
+    #def pool_feats(self, feat: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
+    #    return [pool(f, rngs=rngs) for f, pool in zip(feat, self.attn_pool)]
+
     def pool_feats(self, feat: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
-        return [pool(f, rngs=rngs) for f, pool in zip(feat, self.attn_pool)]
+        return [jnp.mean(f, axis=-2) for f, pool in zip(feat, self.attn_pool)]
 
     def sample_actions(self, obs: Observation, *, rngs: nnx.Rngs) -> Prediction:
         attn_mask = make_attn_mask(

@@ -150,7 +150,7 @@ def fsdp_sharding(
 
 
 def make_mesh(cfg: DistributedConfig):
-    devices = np.array(jax.devices()).reshape(cfg.mesh_shape)
+    devices = np.array(jax.devices())[:np.prod(cfg.mesh_shape)].reshape(cfg.mesh_shape)
     mesh = jax.sharding.Mesh(devices, (BATCH_AXIS, FSDP_AXIS))
     print(f"Created mesh {mesh=}")
     return mesh
