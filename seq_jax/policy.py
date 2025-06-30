@@ -345,11 +345,11 @@ class TransformerEncoderBlock(nnx.Module):
             mask=~attn_mask,
             rngs=rngs,
         )
-        #x_p = activation_sharding_constraint(x)
+        # x_p = activation_sharding_constraint(x_p)
 
         x = x + x_p
         x_p = self.mlp_block(self.ln_2(x), rngs=rngs)
-        #x_p = activation_sharding_constraint(x_p)
+        # x_p = activation_sharding_constraint(x_p)
         return x + x_p
 
 
@@ -514,7 +514,7 @@ class TransformerConcatPolicy(nnx.Module):
         x = self.act(x)
         x = self.in_proj2(x, rngs=rngs)
         # (T, B, d) -> (B, T, d)
-        #x = x.transpose(1, 0, 2)
+        x = x.transpose(1, 0, 2)
         x = x + self.pos_embed
         x = self.encoder(x, attn_mask, rngs=rngs)
 

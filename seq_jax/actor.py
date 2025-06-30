@@ -196,8 +196,8 @@ class TransformerConcatActor(nnx.Module):
         )
         obs_cat = activation_sharding_constraint(obs_cat)
         # (B, T, D) -> (T, B, D)
-        #obs_cat = obs_cat.transpose(1, 0, 2)
-        #obs_cat = self.normalize_traj(obs_cat)
+        obs_cat = obs_cat.transpose(1, 0, 2)
+        obs_cat = self.normalize_traj(obs_cat)
 
         # Predict actions + compute loss
         pred_act = self.policy(obs_cat, attn_mask, rngs=rngs)

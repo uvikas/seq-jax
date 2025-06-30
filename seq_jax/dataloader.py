@@ -29,6 +29,7 @@ class DataConfig:
     global_batch_size: int = 256
     shufflebuffer: int = 1024
     shardshuffle: int = 100
+    prefetch_device_factor: int = 5
     num_workers: int = 4
     prefetch_factor: int | None = None
 
@@ -202,7 +203,6 @@ class PrefetchLoader(Iterator):
         dataloader: Iterator[Any],
         sharding: jax.sharding.Sharding,
         buffer_size: int = 2,
-        num_workers: int = 4,
     ):
         self._dl_iter = iter(dataloader)
         self._sharding = sharding
@@ -347,8 +347,17 @@ def _pred_slice(x, context_len, pred_len):
     return x[: context_len + pred_len - 1]
 
 
-def _finite_sample(fields):
-    return all(np.isfinite(f).all() for f in fields)
+def skip_broken_shard(exc):
+    # exc can be OSError, tarfile.ReadError, etc.
+    print(f"[WARN] problem with: {exc} - skipping shard")
+    return True
+
+
+def finite_sample(fields):
+    """True only if every np.ndarray in the sample is finite."""
+    if any(f is None for f in fields):
+        return False
+    return all(np.isfinite(f).all() for f in fields if isinstance(f, np.ndarray))
 
 
 def _glob_shards(dataset_root: str, dataset_names: List[str]) -> List[str]:
@@ -400,6 +409,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
 
     dataset = wds.WebDataset(
         roots,
+        handler=skip_broken_shard,
         resampled=False,
         shardshuffle=cfg.shardshuffle,
         nodesplitter=wds.shardlists.split_by_node,
@@ -410,8 +420,10 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
         dataset = (
             dataset.decode("torch")
             .repeat()
-            .to_tuple("vision.npy", "state.npy", "action.npy", "json")
-            .shuffle(512)
+            .to_tuple(
+                "vision.npy", "state.npy", "action.npy", "json", missing_is_error=False
+            )
+            .select(finite_sample)
             .map(
                 partial(
                     slide,
@@ -435,7 +447,6 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
                 partial(_pred_slice, context_len=context_len, pred_len=pred_len),
                 partial(_ctx_slice, context_len=context_len),
             )
-            .select(_finite_sample)
             .batched(cfg.global_batch_size // jax.process_count(), partial=False)
         )
     return dataset
@@ -454,5 +465,7 @@ def make_dataloader(
         seed=0,
     )
     dataloader = iter(dataloader)
-    dataloader = PrefetchLoader(dataloader, sharding)
+    dataloader = PrefetchLoader(
+        dataloader, sharding, buffer_size=cfg.prefetch_device_factor
+    )
     return dataloader
