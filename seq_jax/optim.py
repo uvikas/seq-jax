@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from typing import Tuple
 
+import jax
 import optax
+
+from flax import nnx
 
 
 @dataclass
@@ -19,10 +22,42 @@ class OptimConfig:
     ema_alpha: float = 1e-5
 
 
+_EXCLUDE_FROM_WEIGHT_DECAY = (
+    "ln",
+    "token",
+    "bn",
+    "bias",
+    "scale",
+    "pos_embed",
+    "mean",
+    "var",
+    "img_encoder",
+)
+
+
+def wd_mask(params: nnx.State) -> nnx.State:
+    def _keep(path, _leaf):
+        path_str = ".".join(map(str, path)).lower()
+        return not any(substr in path_str for substr in _EXCLUDE_FROM_WEIGHT_DECAY)
+
+    return jax.tree_util.tree_map_with_path(_keep, params)
+
+
 def make_optimizer(
-    cfg: OptimConfig, lr_scheduler: optax.Schedule
+    cfg: OptimConfig, lr_scheduler: optax.Schedule, params: nnx.State
 ) -> optax.GradientTransformation:
     """Create optimizer."""
+    mask = wd_mask(params)
+    print(
+        "Excluding from weight decay: ",
+        ", ".join(
+            [
+                ".".join(map(str, [e.key if e is not None else e.index for e in path]))
+                for path, apply_wd in jax.tree.flatten_with_path(mask)[0]
+                if not apply_wd
+            ]
+        ),
+    )
     return optax.chain(
         optax.clip_by_global_norm(cfg.clip_norm),
         optax.adamw(
@@ -31,6 +66,7 @@ def make_optimizer(
             b1=cfg.betas[0],
             b2=cfg.betas[1],
             eps=1e-8,
+            mask=mask,
         ),
     )
 

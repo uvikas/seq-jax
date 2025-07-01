@@ -13,6 +13,7 @@ import termcolor
 import time
 import torch
 
+from clu import parameter_overview
 from dataclasses import dataclass, field
 from flax import nnx, struct
 from functools import partial
@@ -86,7 +87,6 @@ def make_train_state(
 ):
     """Create initial training state."""
 
-    tx = make_optimizer(cfg.optim, lr_scheduler)
     model = make_model(cfg.model, rngs=rngs)
     params = nnx.state(model)
     graphdef = nnx.graphdef(model)
@@ -97,17 +97,20 @@ def make_train_state(
 
     # Filter frozen parameters
     params = nnx.state(model)
-    trainable_params = params.filter(cfg.trainable_filter)
+    print(parameter_overview.get_parameter_overview(params.to_pure_dict()))
+    trainable_params = params.filter(cfg.trainable_filter).to_pure_dict()
     frozen_params = params.filter(cfg.frozen_filter)
     print(
-        "Frozen params: "
-        + ", ".join(
+        "Frozen params: ",
+        ", ".join(
             [
-                ".".join([str(it) for it in path_tuple])
+                ".".join(map(str, path_tuple))
                 for path_tuple in frozen_params.flat_state().paths
             ]
         ),
     )
+
+    tx = make_optimizer(cfg.optim, lr_scheduler, trainable_params)
     opt_state = tx.init(trainable_params)
 
     # Count number of params
@@ -211,8 +214,10 @@ def train_step(
     (loss, loss_dict), grads = grad_fn(model, rng, obs, pred)
 
     params = state.params.filter(cfg.trainable_filter)
-    updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
-    new_params = optax.apply_updates(params, updates)
+    updates, new_opt_state = state.tx.update(
+        grads.to_pure_dict(), state.opt_state, params.to_pure_dict()
+    )
+    new_params = optax.apply_updates(params.to_pure_dict(), updates)
     nnx.update(model, new_params)
     new_params = nnx.state(model)
 
