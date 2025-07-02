@@ -271,6 +271,7 @@ class TorchDataLoader:
             generator=generator,
             prefetch_factor=cfg.prefetch_factor,
         )
+        self._data_loader = self._data_loader.unbatched().shuffle(cfg.shufflebuffer).batched(cfg.global_batch_size // jax.process_count())
 
         self.pack_batch = partial(
             pack_batch,
