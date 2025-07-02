@@ -74,7 +74,7 @@ graphdef, state = nnx.split(jax_model)
 ckptr = ocp.PyTreeCheckpointer()
 restored_state = ckptr.restore("/tmp/jax_model/pure/", item=nnx.state(jax_model))
 jax_model = nnx.merge(graphdef, restored_state)
-jax_model = jax_model.eval()
+jax_model.eval()
 
 obs = seq_jax.policy.Observation(
     img_rgb=[
