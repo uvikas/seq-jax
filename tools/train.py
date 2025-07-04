@@ -27,7 +27,6 @@ from seq_jax.distributed import (
     set_mesh,
     setup_env,
     init_dist,
-    fsdp_sharding,
     make_mesh,
     BATCH_AXIS,
 )
@@ -174,8 +173,12 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
         # No checkpoints saved, so we can't restore
         return state
 
-    restored = ckptr.restore(step=None, items={"train_state": state})
+    params = state.params
+    state = dataclasses.replace(state, params={})
+    restored = ckptr.restore(step=None, items={"train_state": state, "params": params})
     restored_state = restored["train_state"]
+    restored_state = dataclasses.replace(restored_state, params=params)
+
     print(f"Restored training state from checkpoint at step {restored_state.step}")
     return restored_state
 
@@ -185,7 +188,9 @@ def save_state(
 ):
     step = int(state.step)
     print(f"Saving checkpoint at step {step} to {ckptr.directory}")
-    ckptr.save(step, items={"train_state": state})
+    params = state.params
+    save_train_state = dataclasses.replace(state, params={})
+    ckptr.save(step, items={"train_state": save_train_state, "params": params})
 
     if wait:
         ckptr.wait_until_finished()
