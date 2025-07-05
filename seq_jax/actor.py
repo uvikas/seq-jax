@@ -214,7 +214,9 @@ class TransformerConcatActor(nnx.Module):
         }
         return loss, loss_dict
 
-    def pool_feats(self, feat: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
+    def pool_feats(
+        self, feat: List[jnp.ndarray], *, rngs: nnx.Rngs
+    ) -> List[jnp.ndarray]:
         return [pool(f, rngs=rngs) for f, pool in zip(feat, self.attn_pool)]
 
     def sample_actions(self, obs: Observation, *, rngs: nnx.Rngs) -> Prediction:
@@ -222,38 +224,11 @@ class TransformerConcatActor(nnx.Module):
             obs.mask, self.cfg.policy.num_heads, causal=self.cfg.policy.causal
         )
 
-        policy_in = jax.tree.map(
-            lambda x: x[:, : self.context_len] if x is not None else None,
-            obs,
-            is_leaf=lambda x: x is None,
-        )
-
-        # Extract features from rgb
-        if policy_in.img_feat is None:
-            b, t, c, h, w = policy_in.img_rgb[0].shape
-            rgb_flat = [
-                rgb.reshape(b * t, c, h, w).astype(jnp.float32)
-                for rgb in policy_in.img_rgb
-            ]
-            rgb_cat = jnp.concatenate(rgb_flat, axis=0)
-            rgb_cat = normalize(rgb_cat)
-            feats = self.img_encoder(rgb_cat, rngs=rngs)
-            feats = jnp.array_split(feats, self.cfg.num_cams, axis=0)
-            feats = [feat.reshape(b, t, *feat.shape[1:]) for feat in feats]
-            policy_in = policy_in.replace(img_feat=feats)
-
-        # Pool image features
-        img_pooled = self.pool_feats(
-            policy_in.img_feat,
-            rngs=rngs,
-        )
-        policy_in = policy_in.replace(img_pooled=img_pooled)
-
         # Concat + normalize
         obs_cat = jnp.concatenate(
-            policy_in.img_pooled
+            obs.img_pooled
             + [
-                policy_in.state,
+                obs.state,
                 # obs.prev_action,
             ],
             axis=-1,
@@ -265,6 +240,11 @@ class TransformerConcatActor(nnx.Module):
         # Predict actions
         pred_act = self.policy(obs_cat, attn_mask, rngs=rngs)
         return pred_act.action
+
+    def encode_im(self, ims: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
+        # ims: (b, c, h, w)
+        feats = self.img_encoder(ims, rngs=rngs)
+        return feats
 
 
 def make_model(cfg: ModelConfig, rngs: nnx.Rngs):
