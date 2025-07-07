@@ -49,6 +49,9 @@ class LoggingConfig:
 
 
 def init_wandb(cfg: "TrainConfig"):
+    if jax.process_index() != 0:
+        return
+
     if cfg.log.wandb.mode == "disabled":
         wandb.init(mode="disabled")
         return
