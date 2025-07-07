@@ -522,7 +522,7 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
     graphdef, other_state = nnx.split(abstract_model)
 
     # Restore checkpoint on a single device (device 0)
-    single_device_sharding = SingleDeviceSharding(jax.devices()[0])
+    single_device_sharding = SingleDeviceSharding(jax.local_devices()[0])
     other_state = jax.tree.map(
         lambda a: jax.ShapeDtypeStruct(
             a.shape, a.dtype, sharding=single_device_sharding
