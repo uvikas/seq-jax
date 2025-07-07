@@ -330,20 +330,21 @@ class IterTrainMeter(object):
         ) % self.log_period == 0:
             print(dump_json_stats(stats, self.phase + "_iter"))
 
-        wandb.log(
-            {
-                "train/iter": cur_iter + 1,
-                "train/lr": stats["lr"],
-                "train/grad_norm": stats["grad_norm"],
-                "train/param_norm": stats["param_norm"],
-            }
-            | {f"train/iter_{name}": loss_stats[name] for name in self.loss_names}
-            | {
-                f"latency/iter_{name}": latency_stats[name]
-                for name in latency_stats.keys()
-            },
-            step=cur_iter,
-        )
+        if jax.process_index() == 0:
+            wandb.log(
+                {
+                    "train/iter": cur_iter + 1,
+                    "train/lr": stats["lr"],
+                    "train/grad_norm": stats["grad_norm"],
+                    "train/param_norm": stats["param_norm"],
+                }
+                | {f"train/iter_{name}": loss_stats[name] for name in self.loss_names}
+                | {
+                    f"latency/iter_{name}": latency_stats[name]
+                    for name in latency_stats.keys()
+                },
+                step=cur_iter,
+            )
 
 
 def make_meter(cfg: LoggingConfig, total_iter: int) -> IterTrainMeter:

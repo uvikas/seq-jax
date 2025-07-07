@@ -22,9 +22,8 @@ python tools/train.py \
     model.encoder.pretrain_dir=pretrained/ \
     log.save_freq=10000 \
     log.wandb.project=seq-jax \
-    data.num_workers=20 \
-    data.prefetch_factor=4 \
+    data.num_workers=5 \
+    data.prefetch_factor=2 \
     optim.clip_norm=1.0 \
     optim.betas=[0.9,0.95] \
-    resume=True \
-    log.wandb.mode=disabled
+    log.wandb.mode=online
