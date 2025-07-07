@@ -412,6 +412,9 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
     names = _discover_dataset_names(cfg.dataset_root, cfg.dataset_names)
     print(f"Dataset ({len(names)})", names)
 
+    os.environ["RANK"] = str(jax.process_index())
+    os.environ["WORLD_SIZE"] = str(jax.process_count())
+
     dataset = wds.WebDataset(
         roots,
         handler=skip_broken_shard,

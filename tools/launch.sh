@@ -6,6 +6,7 @@ cd ~/seq-jax/
 python tools/train.py \
     dist.mesh_shape=[16,1] \
     dist.init_dist=True \
+    data.chunked=True \
     data.dataset_root=gs://DATA_BUCKET/chunk64-vitb \
     data.dataset_names=[fold_*,fold-dagger*,fold-redtowel*,fold-tealtowel*,fold-greentowel*] \
     logdir=output/fold-h16a1-concat-20hr-lr5e4-vitb-mb256-it100k-chunk64-tpuv4-32 \
