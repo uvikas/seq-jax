@@ -48,16 +48,16 @@ def make_optimizer(
 ) -> optax.GradientTransformation:
     """Create optimizer."""
     mask = wd_mask(params)
-    print(
-        "Excluding from weight decay: ",
-        ", ".join(
-            [
-                ".".join(map(str, [e.key if e is not None else e.index for e in path]))
-                for path, apply_wd in jax.tree.flatten_with_path(mask)[0]
-                if not apply_wd
-            ]
-        ),
-    )
+    #print(
+    #    "Excluding from weight decay: ",
+    #    ", ".join(
+    #        [
+    #            ".".join(map(str, [e.key if e is not None else e.index for e in path]))
+    #            for path, apply_wd in jax.tree.flatten_with_path(mask)[0]
+    #            if not apply_wd
+    #        ]
+    #    ),
+    #)
     return optax.chain(
         optax.clip_by_global_norm(cfg.clip_norm),
         optax.adamw(

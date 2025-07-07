@@ -11,7 +11,7 @@ python tools/train.py \
     data.dataset_names=[fold_*,fold-dagger*,fold-redtowel*,fold-tealtowel*,fold-greentowel*] \
     logdir=output/fold-h16a1-concat-20hr-lr5e4-vitb-mb256-it100k-chunk64-tpuv4-32 \
     data.global_batch_size=256 \
-    data.shufflebuffer=8192 \
+    data.shufflebuffer=2048 \
     data.shardshuffle=100 \
     optim.warmup_steps=1000 \
     optim.num_steps=100000 \
