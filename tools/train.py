@@ -29,6 +29,7 @@ from seq_jax.distributed import (
     init_dist,
     make_mesh,
     BATCH_AXIS,
+    fsdp_sharding,
 )
 from seq_jax.logging import (
     LoggingConfig,
@@ -86,31 +87,46 @@ def make_train_state(
 ):
     """Create initial training state."""
 
+    def init(
+        params: nnx.State,
+        graphdef: nnx.GraphDef,
+    ):
+        # Filter frozen parameters
+        trainable_params = params.filter(cfg.trainable_filter)
+        frozen_params = params.filter(cfg.frozen_filter)
+        print(
+            "Frozen params: "
+            + ", ".join(
+                [
+                    ".".join([str(it) for it in path_tuple])
+                    for path_tuple in frozen_params.flat_state().paths
+                ]
+            ),
+        )
+        opt_state = tx.init(trainable_params.to_pure_dict())
+        state = TrainState(
+            step=0,
+            params=params,
+            model_def=graphdef,
+            tx=tx,
+            opt_state=opt_state,
+            ema_alpha=cfg.optim.ema_alpha,
+            ema_params=params,
+        )
+        return state
+
     model = make_model(cfg.model, rngs=rngs)
     params = nnx.state(model)
     graphdef = nnx.graphdef(model)
-
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    params = jax.device_put(params, replicated_sharding)
-    nnx.update(model, params)
-
-    # Filter frozen parameters
-    params = nnx.state(model)
-    print(parameter_overview.get_parameter_overview(params.to_pure_dict()))
-    trainable_params = params.filter(cfg.trainable_filter).to_pure_dict()
-    frozen_params = params.filter(cfg.frozen_filter)
-    print(
-        "Frozen params: ",
-        ", ".join(
-            [
-                ".".join(map(str, path_tuple))
-                for path_tuple in frozen_params.flat_state().paths
-            ]
-        ),
+    tx = make_optimizer(
+        cfg.optim, lr_scheduler, params.filter(cfg.trainable_filter).to_pure_dict()
     )
 
-    tx = make_optimizer(cfg.optim, lr_scheduler, trainable_params)
-    opt_state = tx.init(trainable_params)
+    train_state_shape = jax.eval_shape(init, params, graphdef)
+    state_sharding = fsdp_sharding(train_state_shape, mesh, log=True)
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+    print(parameter_overview.get_parameter_overview(params.to_pure_dict()))
 
     # Count number of params
     encoder_params = sum(
@@ -127,17 +143,14 @@ def make_train_state(
     print(f"Query pool params: {query_pool_params / 1e6:.2f}M")
     print(f"Policy params: {policy_params / 1e6:.2f}M")
 
-    state = TrainState(
-        step=0,
-        params=params,
-        model_def=graphdef,
-        tx=tx,
-        opt_state=opt_state,
-        ema_alpha=cfg.optim.ema_alpha,
-        ema_params=params,
+    train_state_fn = jax.jit(
+        init,
+        in_shardings=replicated_sharding,
+        out_shardings=state_sharding,
     )
+    train_state = train_state_fn(params, graphdef)
 
-    return state, replicated_sharding
+    return train_state, state_sharding
 
 
 def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManager:
