@@ -144,6 +144,7 @@ class Timer:
         self.start_time = 0.0
         self.diff = 0.0
         self.average_time = 0.0
+        self.times = deque(maxlen=50)
         self.reset()
 
     def tic(self) -> None:
@@ -154,6 +155,8 @@ class Timer:
         self.total_time += self.diff
         self.calls += 1
         self.average_time = self.total_time / self.calls
+        self.times.append(self.diff)
+        self.sliding_average_time = sum(self.times) / len(self.times)
 
     def latest(self) -> float:
         return self.diff
@@ -300,7 +303,9 @@ class IterTrainMeter(object):
 
     def get_iter_stats(self, cur_iter: int):
         cur_iter_total = cur_iter + 1
-        eta_sec = self.iter_timer.average_time * (self.max_iter - cur_iter_total)
+        eta_sec = self.iter_timer.sliding_average_time * (
+            self.max_iter - cur_iter_total
+        )
         stats = {
             "iter": "{}/{}".format(cur_iter + 1, self.max_iter),
             "time_avg": self.iter_timer.average_time,
