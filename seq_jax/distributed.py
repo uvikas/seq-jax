@@ -73,9 +73,6 @@ def setup_env(cfg: EnvConfig):
 
 
 def init_dist(cfg: DistributedConfig):
-    print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
-    print(f"Jax devices: {jax.device_count()}")
-
     if not cfg.init_dist:
         return
 

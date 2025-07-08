@@ -292,6 +292,9 @@ def train(cfg: TrainConfig):
     init_wandb(cfg)
     init_profiler(cfg.log.profiler)
 
+    print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
+    print(f"Jax devices: {jax.device_count()}")
+
     root_rng = jax.random.PRNGKey(cfg.seed)
     init_rng, train_rng = jax.random.split(root_rng)
     rngs = nnx.Rngs(init_rng)
