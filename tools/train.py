@@ -153,7 +153,7 @@ def make_train_state(
 
 def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManager:
     os.makedirs(logdir, exist_ok=True)
-    
+
     mngr = ocp.CheckpointManager(
         logdir,
         item_handlers={
@@ -312,7 +312,7 @@ def train(cfg: TrainConfig):
     )
     lr_scheduler = make_lr_scheduler(cfg.optim)
     meter = make_meter(cfg.log, cfg.optim.num_steps)
-    
+
     if cfg.log.gcs_ckpt:
         ckpt_path = os.path.join(cfg.log.gcs_ckpt, cfg.exp_name)
     else:
