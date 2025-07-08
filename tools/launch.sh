@@ -4,12 +4,13 @@ export WANDB_API_KEY="REDACTED"
 
 cd ~/seq-jax/
 python tools/train.py \
+    exp_name=fold-h16a1-concat-20hr-lr5e4-vitb-mb256-it100k-chunk64-tpuv4-32-sb4k2k \
     dist.mesh_shape=[16,1] \
     dist.init_dist=True \
     data.chunked=True \
     data.dataset_root=gs://DATA_BUCKET/chunk64-vitb \
     data.dataset_names=[fold_*,fold-dagger*,fold-redtowel*,fold-tealtowel*,fold-greentowel*] \
-    logdir=output/fold-h16a1-concat-20hr-lr5e4-vitb-mb256-it100k-chunk64-tpuv4-32-sb4k2k \
+    logdir=output/ \
     data.global_batch_size=256 \
     data.shufflebuffer=4096 \
     data.dl_shufflebuffer=2048 \

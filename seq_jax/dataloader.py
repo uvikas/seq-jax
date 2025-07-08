@@ -365,7 +365,7 @@ def finite_sample(fields):
     return all(np.isfinite(f).all() for f in fields if isinstance(f, np.ndarray))
 
 
-def _glob_shards(dataset_root: str, dataset_names: List[str]) -> List[str]:
+def glob_shards(dataset_root: str, dataset_names: List[str]) -> List[str]:
     """Return a list of shard paths."""
     if dataset_root.startswith("gs://"):
         fs = fsspec.filesystem("gcs")
@@ -383,7 +383,7 @@ def _glob_shards(dataset_root: str, dataset_names: List[str]) -> List[str]:
     return shards
 
 
-def _discover_dataset_names(dataset_root: str, dataset_names: List[str]) -> List[str]:
+def discover_dataset_names(dataset_root: str, dataset_names: List[str]) -> List[str]:
     """Discover dataset folders for logging."""
     if dataset_root.startswith("gs://"):
         fs = fsspec.filesystem("gcs")
@@ -400,7 +400,7 @@ def _discover_dataset_names(dataset_root: str, dataset_names: List[str]) -> List
 
 
 def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDataset:
-    roots = _glob_shards(cfg.dataset_root, cfg.dataset_names)
+    roots = glob_shards(cfg.dataset_root, cfg.dataset_names)
     if len(roots) == 0:
         raise FileNotFoundError(
             f"No shards found under root='{cfg.dataset_root}' with patterns {cfg.dataset_names}."
@@ -409,7 +409,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
     np.random.shuffle(roots)
     print("Webdataset using", len(roots), "shards")
 
-    names = _discover_dataset_names(cfg.dataset_root, cfg.dataset_names)
+    names = discover_dataset_names(cfg.dataset_root, cfg.dataset_names)
     print(f"Dataset ({len(names)})", names)
 
     os.environ["RANK"] = str(jax.process_index())

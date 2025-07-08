@@ -47,6 +47,8 @@ class LoggingConfig:
     wandb: WandbConfig = field(default_factory=WandbConfig)
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
+    gcs_ckpt: str | None = None
+
 
 def init_wandb(cfg: "TrainConfig"):
     if jax.process_index() != 0:
@@ -56,8 +58,7 @@ def init_wandb(cfg: "TrainConfig"):
         wandb.init(mode="disabled")
         return
 
-    name = os.path.basename(os.path.normpath(cfg.logdir))
-    run_id_file = os.path.join(cfg.logdir, "wandb_id.txt")
+    run_id_file = os.path.join(cfg.logdir, cfg.exp_name, "wandb_id.txt")
 
     if cfg.resume:
         with open(run_id_file, "r") as f:
@@ -69,8 +70,8 @@ def init_wandb(cfg: "TrainConfig"):
         )
     else:
         wandb.init(
-            dir=cfg.logdir,
-            name=name,
+            dir=os.path.join(cfg.logdir, cfg.exp_name),
+            name=cfg.exp_name,
             project=cfg.log.wandb.project,
             entity=cfg.log.wandb.entity,
             config=asdict(cfg),

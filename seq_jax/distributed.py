@@ -73,6 +73,9 @@ def setup_env(cfg: EnvConfig):
 
 
 def init_dist(cfg: DistributedConfig):
+    print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
+    print(f"Jax devices: {jax.device_count()}")
+
     if not cfg.init_dist:
         return
 
@@ -83,9 +86,7 @@ def init_dist(cfg: DistributedConfig):
         process_id=cfg.process_id,
     )
 
-    print(
-        f"Initialized process: {jax.devices()=} {jax.local_devices()=}"
-    )
+    print(f"Initialized process: {jax.devices()=} {jax.local_devices()=}")
 
 
 def make_mesh(cfg: DistributedConfig):

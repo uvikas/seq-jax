@@ -9,9 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
-import termcolor
-import time
-import torch
+import subprocess
 
 from clu import parameter_overview
 from dataclasses import dataclass, field
@@ -197,7 +195,11 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
 
 
 def save_state(
-    ckptr: ocp.CheckpointManager, state: TrainState, step: int, wait: bool = False
+    ckptr: ocp.CheckpointManager,
+    state: TrainState,
+    step: int,
+    gcs_path: str | None = None,
+    wait: bool = False,
 ):
 
     step = int(state.step)
@@ -206,8 +208,20 @@ def save_state(
     save_train_state = dataclasses.replace(state, params={})
     ckptr.save(step, items={"train_state": save_train_state, "params": params})
 
-    if wait:
+    if wait or gcs_path:
         ckptr.wait_until_finished()
+
+    if gcs_path:
+        local_ckpt_dir = f"{ckptr.directory}/{step}/"
+        dest_uri = f"{gcs_path.rstrip('/')}/{cfg.exp_name}/{step}"
+        try:
+            subprocess.run(
+                ["gsutil", "-m", "cp", "-r", local_ckpt_dir, dest_uri],
+                check=True,
+            )
+            print(f"Uploaded checkpoint to {dest_uri}")
+        except Exception as e:
+            print(f"GCS upload from {local_ckpt_dir} to {dest_uri} failed: {e}")
 
 
 def train_step(
@@ -278,9 +292,6 @@ def train(cfg: TrainConfig):
     init_wandb(cfg)
     init_profiler(cfg.log.profiler)
 
-    print(f"Jax process: {jax.process_index()} / {jax.process_count()}")
-    print(f"Jax devices: {jax.device_count()}")
-
     root_rng = jax.random.PRNGKey(cfg.seed)
     init_rng, train_rng = jax.random.split(root_rng)
     rngs = nnx.Rngs(init_rng)
@@ -297,7 +308,7 @@ def train(cfg: TrainConfig):
     )
     lr_scheduler = make_lr_scheduler(cfg.optim)
     meter = make_meter(cfg.log, cfg.optim.num_steps)
-    ckptr = make_checkpointer(cfg.logdir, resume=cfg.resume)
+    ckptr = make_checkpointer(os.path.join(cfg.logdir, cfg.exp_name), resume=cfg.resume)
 
     # Create train state
     state, state_sharding = make_train_state(cfg, lr_scheduler, mesh, rngs)
@@ -359,9 +370,13 @@ def train(cfg: TrainConfig):
         with meter.timer("save"):
             # Save a checkpoint
             if (step + 1) % cfg.log.save_freq == 0 or step == cfg.optim.num_steps - 1:
-                # Wait for the final checkpoint to complete
-                is_final_checkpoint = step == cfg.optim.num_steps - 1
-                save_state(ckptr, state, step, wait=is_final_checkpoint)
+                save_state(
+                    ckptr,
+                    state,
+                    step,
+                    gcs_path=cfg.log.gcs_ckpt,
+                    wait=(step == cfg.optim.num_steps - 1),
+                )
 
 
 def read_cfg() -> TrainConfig:
@@ -372,8 +387,9 @@ def read_cfg() -> TrainConfig:
     cfg = OmegaConf.to_object(cfg)
 
     # Dump config
-    os.makedirs(cfg.logdir, exist_ok=True)
-    with open(os.path.join(cfg.logdir, "config.yaml"), "w") as f:
+    output_dir = os.path.join(cfg.logdir, cfg.exp_name)
+    os.makedirs(output_dir, exist_ok=True)
+    with open(os.path.join(output_dir, "config.yaml"), "w") as f:
         OmegaConf.save(cfg, f)
 
     return cfg
