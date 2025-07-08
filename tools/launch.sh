@@ -9,9 +9,10 @@ python tools/train.py \
     data.chunked=True \
     data.dataset_root=gs://DATA_BUCKET/chunk64-vitb \
     data.dataset_names=[fold_*,fold-dagger*,fold-redtowel*,fold-tealtowel*,fold-greentowel*] \
-    logdir=output/fold-h16a1-concat-20hr-lr5e4-vitb-mb256-it100k-chunk64-tpuv4-32 \
+    logdir=output/fold-h16a1-concat-20hr-lr5e4-vitb-mb256-it100k-chunk64-tpuv4-32-sb4k2k \
     data.global_batch_size=256 \
-    data.shufflebuffer=2048 \
+    data.shufflebuffer=4096 \
+    data.dl_shufflebuffer=2048 \
     data.shardshuffle=100 \
     optim.warmup_steps=1000 \
     optim.num_steps=100000 \
@@ -26,7 +27,6 @@ python tools/train.py \
     log.save_freq=10000 \
     log.wandb.project=seq-jax \
     data.num_workers=5 \
-    data.prefetch_factor=2 \
     optim.clip_norm=1.0 \
     optim.betas=[0.9,0.95] \
     log.wandb.mode=online

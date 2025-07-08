@@ -199,8 +199,6 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
 def save_state(
     ckptr: ocp.CheckpointManager, state: TrainState, step: int, wait: bool = False
 ):
-    if jax.process_index() != 0:
-        return
 
     step = int(state.step)
     print(f"Saving checkpoint at step {step} to {ckptr.directory}")

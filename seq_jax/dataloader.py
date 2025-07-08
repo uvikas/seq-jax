@@ -28,6 +28,7 @@ class DataConfig:
     chunked: bool = False
     global_batch_size: int = 256
     shufflebuffer: int = 1024
+    dl_shufflebuffer: int = 1024
     shardshuffle: int = 100
     prefetch_device_factor: int = 5
     num_workers: int = 4
@@ -216,7 +217,6 @@ class PrefetchLoader(Iterator):
                     lambda x: jax.make_array_from_process_local_data(
                         sharding,
                         x,
-                        x.shape,
                     ),
                     b,
                 )
@@ -273,7 +273,7 @@ class TorchDataLoader:
         )
         self._data_loader = (
             self._data_loader.unbatched()
-            .shuffle(cfg.shufflebuffer)
+            .shuffle(cfg.dl_shufflebuffer)
             .batched(cfg.global_batch_size // jax.process_count())
         )
 

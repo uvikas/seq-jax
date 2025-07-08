@@ -84,7 +84,7 @@ def init_dist(cfg: DistributedConfig):
     )
 
     print(
-        f"Initialized process {cfg.process_id} of {cfg.num_processes}: {jax.devices()=} {jax.local_devices()=}"
+        f"Initialized process: {jax.devices()=} {jax.local_devices()=}"
     )
 
 

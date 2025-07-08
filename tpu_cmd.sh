@@ -90,7 +90,7 @@ function _tpu_check {
     tpu_ips=$(_tpu_ips $tpu_zone $tpu_project $tpu_name)
     for host in $tpu_ips; do
         echo "============== Checking host: $host =============="
-        ssh $host 'tmux capture-pane -pt launch -S -2000'
+        ssh $host 'tmux capture-pane -pt launch -S -10'
         echo
         echo
     done
@@ -103,13 +103,13 @@ function _tpu_copy {
 
     tpu_ips=$(_tpu_ips $tpu_zone $tpu_project $tpu_name)
     for host in $tpu_ips; do
-        rsync -avPI --exclude=logs --exclude=__pycache__ --exclude=.git $PROJECT_HOME/$PROJECT_NAME $host:~/ &
+        rsync -avPI --exclude=logs --exclude=__pycache__ --exclude=.git --exclude=output $PROJECT_HOME/$PROJECT_NAME $host:~/ &
     done
     wait &> /dev/null
     sleep 1s
 
     for host in $tpu_ips; do
-        rsync -avPI --exclude=logs --exclude=__pycache__ --exclude=.git $PROJECT_HOME/$PROJECT_NAME $host:~/
+        rsync -avPI --exclude=logs --exclude=__pycache__ --exclude=.git --exclude=output $PROJECT_HOME/$PROJECT_NAME $host:~/
     done
     wait &> /dev/null
     sleep 1s
