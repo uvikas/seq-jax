@@ -144,7 +144,7 @@ class Timer:
         self.start_time = 0.0
         self.diff = 0.0
         self.average_time = 0.0
-        self.times = deque(maxlen=50)
+        self.times = deque(maxlen=500)
         self.reset()
 
     def tic(self) -> None:
