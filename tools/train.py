@@ -211,7 +211,7 @@ def save_state(
     if wait or gcs_path:
         ckptr.wait_until_finished()
 
-    if gcs_path:
+    if jax.process_index() == 0 and gcs_path:
         local_ckpt_dir = f"{ckptr.directory}/{step}/"
         dest_uri = f"{gcs_path.rstrip('/')}/{cfg.exp_name}/{step}"
         try:
