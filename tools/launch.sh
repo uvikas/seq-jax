@@ -11,6 +11,7 @@ python tools/train.py \
     data.dataset_root=gs://DATA_BUCKET/chunk64-vitb \
     data.dataset_names=[fold_*,fold-dagger*,fold-redtowel*,fold-tealtowel*,fold-greentowel*] \
     logdir=output/ \
+    log.gcs_ckpt=gs://CKPT_BUCKET \
     data.global_batch_size=256 \
     data.shufflebuffer=4096 \
     data.dl_shufflebuffer=2048 \

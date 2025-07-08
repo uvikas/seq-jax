@@ -153,8 +153,9 @@ def make_train_state(
 
 def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManager:
     os.makedirs(logdir, exist_ok=True)
+    
     mngr = ocp.CheckpointManager(
-        os.path.abspath(logdir),
+        logdir,
         item_handlers={
             "train_state": ocp.PyTreeCheckpointHandler(),
             "params": ocp.PyTreeCheckpointHandler(),
@@ -311,7 +312,12 @@ def train(cfg: TrainConfig):
     )
     lr_scheduler = make_lr_scheduler(cfg.optim)
     meter = make_meter(cfg.log, cfg.optim.num_steps)
-    ckptr = make_checkpointer(os.path.join(cfg.logdir, cfg.exp_name), resume=cfg.resume)
+    
+    if cfg.log.gcs_ckpt:
+        ckpt_path = os.path.join(cfg.log.gcs_ckpt, cfg.exp_name)
+    else:
+        ckpt_path = os.path.abspath(os.path.join(cfg.logdir, cfg.exp_name))
+    ckptr = make_checkpointer(ckpt_path, resume=cfg.resume)
 
     # Create train state
     state, state_sharding = make_train_state(cfg, lr_scheduler, mesh, rngs)
