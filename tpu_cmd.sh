@@ -109,7 +109,7 @@ function _tpu_copy {
     sleep 1s
 
     for host in $tpu_ips; do
-        rsync -avPI --exclude=logs --exclude=__pycache__ --exclude=.git --exclude=output $PROJECT_HOME/$PROJECT_NAME $host:~/
+        rsync -avPI --exclude=logs --exclude=__pycache__ --exclude=.git --exclude=output $PROJECT_HOME/$PROJECT_NAME $host:~/ &
     done
     wait &> /dev/null
     sleep 1s
