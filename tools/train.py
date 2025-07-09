@@ -401,6 +401,18 @@ def read_cfg() -> TrainConfig:
     with open(os.path.join(output_dir, "config.yaml"), "w") as f:
         OmegaConf.save(cfg, f)
 
+    if cfg.log.gcs_ckpt:
+        # Copy config to gcs
+        subprocess.run(
+            [
+                "gsutil",
+                "cp",
+                os.path.join(output_dir, "config.yaml"),
+                os.path.join(cfg.log.gcs_ckpt, cfg.exp_name, "config.yaml"),
+            ],
+            check=True,
+        )
+
     return cfg
 
 
