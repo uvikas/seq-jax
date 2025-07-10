@@ -8,43 +8,6 @@ function _tpu_ips {
 
 }
 
-function _tpu_create {
-    tpu_zone=$1
-    tpu_project=$2
-    tpu_gen=$3
-    tpu_cores=$4
-    tpu_name=$5
-    if [ "$tpu_gen" = "v3" ]; then
-        software_version='tpu-vm-base'
-    else
-        software_version='tpu-vm-v4-base'
-    fi
-
-    if [[ $tpu_cores =~ ^[0-9]+$ ]]; then
-        gcloud alpha compute tpus tpu-vm create \
-            $tpu_name \
-            --accelerator-type="$tpu_gen-$tpu_cores" \
-            --version $software_version \
-            --zone $tpu_zone \
-            --project $tpu_project
-    else
-        gcloud alpha compute tpus tpu-vm create \
-            $tpu_name \
-            --type="$tpu_gen" \
-            --topology="$tpu_cores" \
-            --version $software_version \
-            --zone $tpu_zone \
-            --project $tpu_project
-    fi
-}
-
-function _tpu_retry_create {
-    while true; do
-        _tpu_create "$@"
-        sleep 120s
-    done
-}
-
 function _tpu_cp_ssh_key {
     tpu_zone=$1
     tpu_project=$2
@@ -211,17 +174,19 @@ function tpu {
     elif [ "$2" = "ips" ]; then
         _tpu_ips $tpu_zone $tpu_project $3
     elif [ "$2" = "delete" ]; then
-        gcloud alpha compute tpus tpu-vm delete $3 --zone $tpu_zone --project $tpu_project --quiet
+        gcloud alpha compute tpus tpu-vm delete $3 --zone $tpu_zone --project $tpu_project --quiet --async
     elif [ "$2" = "delete_queued" ]; then
         gcloud alpha compute tpus queued-resources delete $3 --project $tpu_project --zone $tpu_zone
     elif [ "$2" = "create" ]; then
-        _tpu_create $tpu_zone $tpu_project $tpu_gen $3 $4
+        gcloud alpha compute tpus tpu-vm create $3 --zone $tpu_zone --project $tpu_project --accelerator-type=$4 --runtime-version=tpu-ubuntu2204-base
+    elif [ "$2" = "create_spot" ]; then
+        gcloud alpha compute tpus tpu-vm create $3 --zone $tpu_zone --project $tpu_project --accelerator-type=$4 --runtime-version=tpu-ubuntu2204-base --spot
+    elif [ "$2" = "create_queued" ]; then
+        gcloud alpha compute tpus queued-resources create $3 --node-id=$3 --zone=$tpu_zone --accelerator-type=$4 --runtime-version=tpu-ubuntu2204-base --spot
     elif [ "$2" = "cp_ssh_key" ]; then
         _tpu_cp_ssh_key $tpu_zone $tpu_project $3
-    elif [ "$2" = "retry_create" ]; then
-        _tpu_retry_create $tpu_zone $tpu_project $tpu_gen $3 $4
     elif [ "$2" = "cs" ]; then
-        _tpu_create $tpu_zone $tpu_project $tpu_gen $3 $4
+        # create
         sleep 90s
         _tpu_setup $tpu_zone $tpu_project $4
     elif [ "$2" = "check" ]; then
