@@ -212,18 +212,6 @@ def save_state(
     if wait or gcs_path:
         ckptr.wait_until_finished()
 
-    if jax.process_index() == 0 and gcs_path:
-        local_ckpt_dir = f"{ckptr.directory}/{step}/"
-        dest_uri = f"{gcs_path.rstrip('/')}/{cfg.exp_name}/{step}"
-        try:
-            subprocess.run(
-                ["gsutil", "-m", "cp", "-r", local_ckpt_dir, dest_uri],
-                check=True,
-            )
-            print(f"Uploaded checkpoint to {dest_uri}")
-        except Exception as e:
-            print(f"GCS upload from {local_ckpt_dir} to {dest_uri} failed: {e}")
-
 
 def train_step(
     state: TrainState,
