@@ -12,7 +12,7 @@ import queue
 import threading
 import torch
 import webdataset as wds
-import fsspec  # type: ignore
+import fsspec
 
 from dataclasses import dataclass, field
 from jax.sharding import Sharding

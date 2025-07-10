@@ -1,6 +1,6 @@
 """Train a BC model."""
 
-from typing import Any, Iterable, Tuple
+from typing import Any
 
 import os
 import dataclasses
@@ -18,8 +18,8 @@ from functools import partial
 from jax.sharding import PartitionSpec as P
 from omegaconf import OmegaConf
 
-from seq_jax.dataloader import DataConfig, make_dataloader
-from seq_jax.distributed import (
+from seq_jax.data import DataConfig, make_dataloader
+from seq_jax.dist import (
     DistributedConfig,
     EnvConfig,
     set_mesh,
@@ -29,7 +29,7 @@ from seq_jax.distributed import (
     BATCH_AXIS,
     fsdp_sharding,
 )
-from seq_jax.logging import (
+from seq_jax.log import (
     LoggingConfig,
     make_meter,
     init_wandb,
@@ -39,7 +39,7 @@ from seq_jax.logging import (
 )
 from seq_jax.actor import ModelConfig, make_model, Observation, Prediction
 from seq_jax.optim import OptimConfig, make_optimizer, make_lr_scheduler
-from seq_jax import util
+from seq_jax.policy import PathRegex
 
 
 @dataclass
@@ -59,11 +59,11 @@ class TrainConfig:
 
     @property
     def trainable_filter(self):
-        return nnx.All(nnx.Param, nnx.Not(util.PathRegex(self.model.frozen_filter)))
+        return nnx.All(nnx.Param, nnx.Not(PathRegex(self.model.frozen_filter)))
 
     @property
     def frozen_filter(self):
-        return nnx.All(nnx.Param, util.PathRegex(self.model.frozen_filter))
+        return nnx.All(nnx.Param, PathRegex(self.model.frozen_filter))
 
 
 @struct.dataclass

@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from dataclasses import dataclass, field
 from flax import nnx
 
-from seq_jax.distributed import activation_sharding_constraint
+from seq_jax.dist import activation_sharding_constraint
 from seq_jax.policy import (
     TransformerConcatPolicy,
     TransformerConcatPolicyConfig,

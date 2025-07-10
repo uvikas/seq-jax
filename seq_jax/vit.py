@@ -11,7 +11,7 @@ from flax import nnx
 from functools import partial
 from jax.sharding import SingleDeviceSharding
 
-from seq_jax.distributed import BATCH_AXIS, FSDP_AXIS
+from seq_jax.dist import BATCH_AXIS, FSDP_AXIS
 
 
 def normalize(ims: jax.Array) -> jax.Array:

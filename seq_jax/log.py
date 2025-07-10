@@ -1,4 +1,4 @@
-"""Meters."""
+"""Logging utilities."""
 
 from typing import List, Dict, Any
 
