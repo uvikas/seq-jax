@@ -26,7 +26,7 @@ import orbax.checkpoint as ocp
 
 
 import torch_ref.vision.vit as vit_torch
-import seq_jax.vit as vit_jax
+import seq_jax.vision as vit_jax
 import seq_jax.actor as actor_jax
 from torch_ref.actors.model import make_model as make_torch_model
 

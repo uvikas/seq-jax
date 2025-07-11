@@ -14,7 +14,7 @@ from seq_jax.policy import (
     Prediction,
     QueryPool,
 )
-from seq_jax.vit import VisionEncoder, VisionEncoderConfig, normalize
+from seq_jax.vision import VisionEncoder, VisionEncoderConfig, normalize
 
 ################################################################################
 # Configs

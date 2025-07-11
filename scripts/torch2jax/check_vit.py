@@ -5,7 +5,7 @@ import torch
 from flax import nnx
 import numpy as np
 
-import seq_jax.vit as vit_jax
+import seq_jax.vision as vit_jax
 import torch_ref.vision.vit as vit_torch
 
 torch_enc = vit_torch.Encoder(

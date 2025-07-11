@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Type, Callable, Union, List
+from typing import Optional, Tuple, Type, Callable, Union
 import os
 
 import jax
@@ -10,8 +10,6 @@ from dataclasses import dataclass
 from flax import nnx
 from functools import partial
 from jax.sharding import SingleDeviceSharding
-
-from seq_jax.dist import BATCH_AXIS, FSDP_AXIS
 
 
 def normalize(ims: jax.Array) -> jax.Array:
@@ -27,6 +25,11 @@ def to_tuple(n: int, x: Union[int, Tuple[int, ...]]) -> Tuple[int, ...]:
     if isinstance(x, int):
         return tuple(x for _ in range(n))
     return x
+
+
+################################################################################
+# Vision Transformer
+################################################################################
 
 
 class Identity(nnx.Module):
@@ -534,6 +537,16 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
     print("Loaded encoder from: {}".format(pretrained))
 
     return model
+
+
+################################################################################
+# RegNet
+################################################################################
+
+
+################################################################################
+# Vision Encoder
+################################################################################
 
 
 @dataclass
