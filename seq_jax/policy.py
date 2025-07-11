@@ -442,11 +442,11 @@ class TransformerEncoder(nnx.Module):
 class TransformerConcatPolicyConfig:
     name: str = "transformer_concat"
     causal: bool = True
-    in_proj_hidden_sizes: List[int] = field(default_factory=lambda: [])
+    in_proj_hidden_sizes: List[int] = field(default_factory=lambda: [512])
     num_img_query: int = 16
     embed_dim: int = 768
-    num_blocks: int = 16
-    num_heads: int = 8
+    num_blocks: int = 12
+    num_heads: int = 12
     mlp_ratio: float = 2.0
     attn_dropout: float = 0.0
     mlp_dropout: float = 0.0
@@ -479,15 +479,8 @@ class TransformerConcatPolicy(nnx.Module):
         # Must be static tuple
         self.split_output = tuple(np.array(out_dims).cumsum())
 
-        self.in_proj1 = MLP(
+        self.in_proj = MLP(
             sum(self.input_dim),
-            sum(self.input_dim) // 2,
-            cfg.in_proj_hidden_sizes,
-            stable_init=False,
-            rngs=rngs,
-        )
-        self.in_proj2 = MLP(
-            sum(self.input_dim) // 2,
             cfg.embed_dim,
             cfg.in_proj_hidden_sizes,
             stable_init=False,
@@ -538,9 +531,7 @@ class TransformerConcatPolicy(nnx.Module):
         rngs: nnx.Rngs,
     ) -> Prediction:
         # (T, B, 3*C + D + D)
-        x = self.in_proj1(obs, rngs=rngs)
-        x = self.act(x)
-        x = self.in_proj2(x, rngs=rngs)
+        x = self.in_proj(obs, rngs=rngs)
         # (T, B, d) -> (B, T, d)
         x = x.transpose(1, 0, 2)
         x = x + self.pos_embed
