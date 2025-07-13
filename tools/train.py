@@ -189,7 +189,7 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
     state = dataclasses.replace(state, params={})
     restored = ckptr.restore(step=None, items={"train_state": state, "params": params})
     restored_state = restored["train_state"]
-    restored_state = dataclasses.replace(restored_state, params=params)
+    restored_state = dataclasses.replace(restored_state, params=restored["params"])
 
     print(f"Restored training state from checkpoint at step {restored_state.step}")
     return restored_state
