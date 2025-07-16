@@ -13,7 +13,7 @@ import subprocess
 
 from clu import parameter_overview
 from dataclasses import dataclass, field
-from flax import nnx, struct
+from flax import nnx, struct, traverse_util
 from functools import partial
 from jax.sharding import PartitionSpec as P
 from omegaconf import OmegaConf
@@ -47,7 +47,6 @@ class TrainConfig:
     exp_name: str = "fold"
     logdir: str = "/tmp/bc/"
     seed: int = 0
-    platform: str = "gpu"
     resume: bool = False
 
     data: DataConfig = field(default_factory=DataConfig)
@@ -75,6 +74,28 @@ class TrainState:
     opt_state: optax.OptState
     ema_alpha: float
     ema_params: Any
+
+
+def load_weights(weights_path: str) -> nnx.State:
+    with ocp.PyTreeCheckpointer() as ckptr:
+        metadata = ckptr.metadata(weights_path)
+        params = ckptr.restore(
+            weights_path,
+            ocp.args.PyTreeRestore(
+                item=metadata,
+                restore_args=jax.tree.map(
+                    lambda _: ocp.ArrayRestoreArgs(
+                        restore_type=jax.Array,
+                    ),
+                    metadata,
+                ),
+            ),
+        )
+    flat_params = traverse_util.flatten_dict(params)
+    if all(kp[-1] == "value" for kp in flat_params):
+        flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
+    params = traverse_util.unflatten_dict(flat_params)
+    return params
 
 
 def make_train_state(
@@ -114,6 +135,15 @@ def make_train_state(
         return state
 
     model = make_model(cfg.model, rngs=rngs)
+
+    # Initialize params from checkpoint
+    if cfg.model.init_weights:
+        params = load_weights(cfg.model.init_weights)
+        graphdef, state = nnx.split(model)
+        state.replace_by_pure_dict(params)
+        model = nnx.merge(graphdef, state)
+        print(f"Initialized model from checkpoint {cfg.model.init_weights}")
+
     params = nnx.state(model)
     graphdef = nnx.graphdef(model)
     tx = make_optimizer(
@@ -189,9 +219,12 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
     state = dataclasses.replace(state, params={})
     restored = ckptr.restore(step=None, items={"train_state": state, "params": params})
     restored_state = restored["train_state"]
-    restored_state = dataclasses.replace(restored_state, params=restored["params"])
+    step = restored_state.step
+    restored_state = dataclasses.replace(
+        restored_state, params=restored["params"], step=step + 1
+    )
 
-    print(f"Restored training state from checkpoint at step {restored_state.step}")
+    print(f"Restored training state from checkpoint at step {step}")
     return restored_state
 
 

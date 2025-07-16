@@ -36,6 +36,8 @@ class ModelConfig:
         default_factory=TransformerConcatPolicyConfig
     )
 
+    init_weights: str | None = None
+
 
 ################################################################################
 # Transformer concat actor

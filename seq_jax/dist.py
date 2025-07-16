@@ -21,8 +21,6 @@ class _MeshState:
 
 @dataclass
 class DistributedConfig:
-    platform: str = "gpu"
-
     # (data, model)
     mesh_shape: List[int] = field(default_factory=lambda: [8, 1])
 

@@ -60,7 +60,7 @@ def init_wandb(cfg: "TrainConfig"):
 
     run_id_file = os.path.join(cfg.logdir, cfg.exp_name, "wandb_id.txt")
 
-    if cfg.resume:
+    if cfg.resume and os.path.exists(run_id_file):
         with open(run_id_file, "r") as f:
             run_id = f.read().strip()
         wandb.init(
