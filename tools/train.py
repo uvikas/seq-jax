@@ -86,6 +86,9 @@ def load_weights(weights_path: str) -> nnx.State:
                 restore_args=jax.tree.map(
                     lambda _: ocp.ArrayRestoreArgs(
                         restore_type=jax.Array,
+                        sharding=jax.sharding.SingleDeviceSharding(
+                            jax.local_devices()[0]
+                        ),
                     ),
                     metadata,
                 ),

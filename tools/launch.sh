@@ -19,6 +19,7 @@ python tools/train.py \
     optim.warmup_steps=1000 \
     optim.num_steps=100000 \
     optim.lr=0.0005 \
+    optim.final_lr_ratio=0.01 \
     optim.scheduler=cosine \
     model.name=transformer_concat_querypool \
     model.context_len=16 \
