@@ -330,7 +330,13 @@ class TransformerMultimodalActor(nnx.Module):
             rngs=rngs,
         )
 
-        self.action_start_token = nnx.Param(jnp.zeros((1, 1, cfg.policy.embed_dim)))
+        self.action_token = nnx.Param(
+            jax.random.normal(
+                rngs.params(),
+                (1, 1, 1, cfg.policy.embed_dim),
+            )
+            * 0.02
+        )
 
     def compute_loss(
         self, obs: Observation, pred: Prediction, *, rngs: nnx.Rngs
@@ -376,12 +382,11 @@ class TransformerMultimodalActor(nnx.Module):
         state_embed = self.state_encoder(
             policy_in.noisy_state[:, :, None, :], rngs=rngs
         )
-        prev_action_embed = self.action_encoder(
-            policy_in.prev_action[:, :, None, :], rngs=rngs
-        )
+        # (1, 1, D) -> (B, T, 1, D)
+        action_token = jnp.broadcast_to(self.action_token, state_embed.shape)
 
         # Tokens per mod List[B, T, N, D] * num_mod
-        obs_each_mod = img_pooled + [state_embed, prev_action_embed]
+        obs_each_mod = img_pooled + [state_embed, action_token]
 
         # Predict actions + compute loss
         pred_act = self.policy(obs_each_mod, attn_mask, rngs=rngs)
