@@ -1,6 +1,6 @@
 """Model definitions."""
 
-from typing import List, Optional, Sequence, Union, Callable, Any
+from typing import List, Callable, Any
 
 import jax
 import jax.numpy as jnp
@@ -8,6 +8,7 @@ import numpy as np
 import re
 
 from dataclasses import dataclass, field
+from enum import Enum
 from flax import nnx, struct
 from functools import partial
 
@@ -167,6 +168,22 @@ class MLP(nnx.Module):
 ################################################################################
 
 
+class PoolType(str, Enum):
+    query = "query"
+    seq = "seq"
+
+
+@dataclass
+class PoolConfig:
+    type: PoolType = PoolType.query
+    num_query: int = 16
+    n_layers: int = 4
+    n_heads: int = 8
+    mlp_d: int = 768
+    attn_dropout: float = 0.0
+    mlp_dropout: float = 0.0
+
+
 class QueryPool(nnx.Module):
     """Attention pooling with a learnable query"""
 
@@ -227,7 +244,7 @@ class QueryPool(nnx.Module):
 
     def __call__(self, im_emb: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
         """
-        im_emb: [batch, T, N, C]  (C == input_dim)
+        im_emb: [batch, T, N, C]
         returns: [batch, T, output_dim]
         """
         b, T, N, C = im_emb.shape
@@ -265,6 +282,82 @@ class QueryPool(nnx.Module):
         return out
 
 
+class SeqPool(nnx.Module):
+    """Pool latent features using `n_tokens` extra summary tokens in-sequence
+
+    The summary tokens attend to all input tokens, but input tokens may not attend to summary tokens.
+    """
+
+    def __init__(
+        self,
+        n_tokens: int,
+        n_layers: int,
+        hidden_d: int,
+        n_heads: int,
+        mlp_d: int,
+        attn_dropout: float,
+        mlp_dropout: float,
+        flatten_proj: bool = False,
+        layernorm: Callable = partial(nnx.LayerNorm, epsilon=1e-6),
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.n_tokens = n_tokens
+        self.n_heads = n_heads
+        self.summary_tokens = nnx.Param(
+            jax.random.normal(rngs.params(), (1, 1, n_tokens, hidden_d))
+        )
+        self.encoder = TransformerEncoder(
+            n_layers=n_layers,
+            hidden_d=hidden_d,
+            n_heads=n_heads,
+            mlp_d=mlp_d,
+            attn_dropout=attn_dropout,
+            mlp_dropout=mlp_dropout,
+            layernorm=layernorm,
+            rngs=rngs,
+        )
+
+        self.flatten_proj = flatten_proj
+        if flatten_proj:
+            self.out_proj = nnx.Linear(
+                in_features=hidden_d * n_tokens,
+                out_features=hidden_d,
+                rngs=rngs,
+            )
+
+    def __call__(self, x: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
+        batch_sz, seq_len, n_input_tokens, d = x.shape
+        summary_tokens = jnp.tile(self.summary_tokens, (batch_sz, seq_len, 1, 1))
+        # (B, T, N+K, C)
+        x = jnp.concatenate([summary_tokens, x], axis=2)
+
+        # summary tokens attend to all
+        # input tokens may not attend to summary tokens
+        total_tokens = self.n_tokens + n_input_tokens
+        # (N+K, N+K)
+        mask = jnp.zeros((total_tokens, total_tokens), dtype=bool)
+        mask = mask.at[self.n_tokens :, : self.n_tokens].set(True)
+        # (N+K, N+K) -> (B, T, num_heads, N+K, N+K)
+        mask = jnp.tile(
+            mask[None, None, None, :, :],
+            (batch_sz, seq_len, self.n_heads, 1, 1),
+        )
+
+        # (B, T, N+K, C)
+        x = self.encoder(x, attn_mask=mask, rngs=rngs)
+        # (B, T, K, C)
+        x = x[:, :, : self.n_tokens, :]
+
+        if self.flatten_proj:
+            # (B, T, K, C) -> (B, T, K*C)
+            x = x.reshape(batch_sz, seq_len, -1)
+            # (B, T, K*C) -> (B, T, C)
+            x = self.out_proj(x)
+
+        return x
+
+
 ################################################################################
 #                                                                              #
 #                                 Transformer                                  #
@@ -273,11 +366,7 @@ class QueryPool(nnx.Module):
 
 
 class MLPBlock(nnx.Module):
-    """Transformer MLP block: Dense → Dropout → GELU → Dense → Dropout."""
-
-    w_in: int
-    mlp_d: int
-    dropout: float = 0.0
+    """Transformer MLP block: Dense -> Dropout -> GELU -> Dense -> Dropout."""
 
     def __init__(
         self,
@@ -373,11 +462,8 @@ class TransformerEncoderBlock(nnx.Module):
             mask=~attn_mask,
             rngs=rngs,
         )
-        # x_p = activation_sharding_constraint(x_p)
-
         x = x + x_p
         x_p = self.mlp_block(self.ln_2(x), rngs=rngs)
-        # x_p = activation_sharding_constraint(x_p)
         return x + x_p
 
 
@@ -397,7 +483,6 @@ class TransformerEncoder(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
-        # Initialize a list of TransformerEncoderBlock instances
         self.blocks = []
         for _ in range(n_layers):
             self.blocks.append(
@@ -421,7 +506,6 @@ class TransformerEncoder(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ) -> jax.Array:
-        # Apply each encoder block in sequence
         for block in self.blocks:
             x = block(x, attn_mask=attn_mask, rngs=rngs)
 
@@ -439,11 +523,9 @@ class TransformerEncoder(nnx.Module):
 
 
 @dataclass
-class TransformerConcatPolicyConfig:
-    name: str = "transformer_concat"
+class TransformerPolicyConfig:
     causal: bool = True
     in_proj_hidden_sizes: List[int] = field(default_factory=lambda: [512])
-    num_img_query: int = 16
     embed_dim: int = 768
     num_blocks: int = 12
     num_heads: int = 12
@@ -458,7 +540,7 @@ class TransformerConcatPolicyConfig:
 
 
 class TransformerConcatPolicy(nnx.Module):
-    """Transformer-based policy."""
+    """Transformer-based policy that concatenates all modalities from a single timestep into a single token."""
 
     def __init__(
         self,
@@ -466,7 +548,7 @@ class TransformerConcatPolicy(nnx.Module):
         pred_len: int,
         inp_dims: List[int],
         out_dims: List[int],
-        cfg: TransformerConcatPolicyConfig,
+        cfg: TransformerPolicyConfig,
         *,
         rngs: nnx.Rngs,
     ):
@@ -558,3 +640,94 @@ class TransformerConcatPolicy(nnx.Module):
                 state=jnp.expand_dims(state, axis=2),
                 action=jnp.expand_dims(action, axis=2),
             )
+
+
+class TransformerMultimodalPolicy(nnx.Module):
+    """Transformer-based policy that uses a separate token for each modality."""
+
+    def __init__(
+        self,
+        context_len: int,
+        pred_len: int,
+        tokens_per_mod: List[int],
+        output_dims: List[int],
+        cfg: TransformerPolicyConfig,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.context_len = context_len
+        self.pred_len = pred_len
+        self.multihead_proj = cfg.multihead_proj
+        self.tokens_per_mod = tokens_per_mod
+        self.output_dims = output_dims
+
+        self.pos_embed = nnx.Variable(
+            jnp.expand_dims(get_1d_sincos_pos_embed(cfg.embed_dim, context_len), axis=0)
+        )
+
+        self.encoder = TransformerEncoder(
+            cfg.num_blocks,
+            cfg.embed_dim,
+            cfg.num_heads,
+            int(cfg.embed_dim * cfg.mlp_ratio),
+            cfg.attn_dropout,
+            cfg.mlp_dropout,
+            cfg.last_layer_norm,
+            rngs=rngs,
+        )
+
+        self.out_projs = [
+            [
+                MLP(
+                    cfg.embed_dim,
+                    output_dims[i],
+                    stable_init=True,
+                    rngs=rngs,
+                )
+                for _ in range(pred_len)
+            ]
+            for i in range(len(output_dims))
+        ]
+
+    def __call__(
+        self,
+        obs_each_mod: List[jnp.array],
+        attn_mask: jnp.ndarray,
+        *,
+        rngs: nnx.Rngs,
+    ) -> Prediction:
+        # obs_each_mod: list of (B, T, N, D)
+        # assumes all modalities are hidden_d embedded
+
+        tokens_per_mod = [obs.shape[-2] for obs in obs_each_mod]
+        # obs_each_mod = [obs + self.pos_embed for obs in obs_each_mod]  # TODO
+
+        # List[B, T, N_total, D] * mods -> (B, T, N_total, D)
+        x = jnp.concat(obs_each_mod, axis=-2)
+        batch_sz, ctx_len, n_token_per_step, hidden_d = x.shape
+        # (B, T, N_total, D) -> (B, T * N_total, D)
+        x = jnp.reshape(x, (x.shape[0], -1, *x.shape[3:]))
+        # (B, T * N_total, D) -> (B, T * N_total, D)
+        x = self.encoder(x, attn_mask, rngs=rngs)
+
+        # (B, T * N_total, D) -> (B, T, N_total, D)
+        x = jnp.reshape(x, (x.shape[0], ctx_len, n_token_per_step, x.shape[-1]))
+
+        # (B, T, N_total, D) -> List[B, T, N, D] * num_mod
+        pred_each_mod = jnp.split(x, np.cumsum(tokens_per_mod), axis=-2)
+
+        # Output projection on the last step
+        out_each_mod = [
+            # (B, T, N, D)
+            # -> List[List[B, T, N, D_out] * pred_len] * num_mod
+            # -> List[B, T, pred_len, N, D_out] * num_mod
+            jnp.stack(
+                [out_proj[i](out, rngs=rngs) for i in range(self.pred_len)], axis=-3
+            )
+            for out, out_proj in zip(pred_each_mod, self.out_projs)
+        ]
+        return Prediction(
+            img_pooled=out_each_mod[:3],
+            state=out_each_mod[3].squeeze(axis=-2),
+            action=out_each_mod[4].squeeze(axis=-2),
+        )

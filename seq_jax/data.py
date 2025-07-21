@@ -1,6 +1,6 @@
 """Dataloader."""
 
-from typing import Any, Iterator, List
+from typing import Any, Iterator, List, Callable
 import os
 
 import jax
@@ -138,6 +138,19 @@ class DataConfig:
     )
     joint_noise_std_scale: float = 1.0
     frame_skip: int = 2
+
+
+def tree_to_info(tree, interp_func: Callable[[Any], str] = str) -> str:
+    """Converts a PyTree into a human-readable string for logging."""
+    tree, _ = jax.tree_util.tree_flatten_with_path(tree)
+    return "\n".join(
+        f"{jax.tree_util.keystr(path)}: {interp_func(value)}" for path, value in tree
+    )
+
+
+def array_tree_to_info(tree) -> str:
+    """Converts a PyTree of arrays into a human-readable string for logging."""
+    return tree_to_info(tree, lambda x: f"{x.shape}@{x.dtype}")
 
 
 def pack_batch(

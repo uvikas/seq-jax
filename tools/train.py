@@ -18,7 +18,7 @@ from functools import partial
 from jax.sharding import PartitionSpec as P
 from omegaconf import OmegaConf
 
-from seq_jax.data import DataConfig, make_dataloader
+from seq_jax.data import DataConfig, make_dataloader, array_tree_to_info
 from seq_jax.dist import (
     DistributedConfig,
     EnvConfig,
@@ -173,6 +173,9 @@ def make_train_state(
     print(f"Encoder params: {encoder_params / 1e6:.2f}M")
     print(f"Query pool params: {query_pool_params / 1e6:.2f}M")
     print(f"Policy params: {policy_params / 1e6:.2f}M")
+    print(
+        f"Total params: {(encoder_params + query_pool_params + policy_params) / 1e6:.2f}M"
+    )
 
     train_state_fn = jax.jit(
         init,
@@ -363,7 +366,8 @@ def train(cfg: TrainConfig):
     step_rngs = jax.random.split(train_rng, cfg.optim.num_steps)
 
     # Training loop
-    for step in range(state.step, cfg.optim.num_steps):
+    start_step = state.step
+    for step in range(start_step, cfg.optim.num_steps):
         if cfg.log.profiler.enabled and step == cfg.log.profiler.start_step:
             start_trace(cfg.log.profiler, step)
 
@@ -376,6 +380,9 @@ def train(cfg: TrainConfig):
                 data = next(dataloader)
                 if not jnp.isnan(data[0].img_feat).any():
                     break
+
+            if step == start_step:
+                print(array_tree_to_info(data))
 
         with meter.timer("fwd_bwd"):
             # Perform training step
