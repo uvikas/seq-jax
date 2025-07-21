@@ -207,6 +207,8 @@ def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManage
         ),
     )
 
+    print("Checkpoint manager steps: ", tuple(mngr.all_steps()))
+
     if not resume and not (tuple(mngr.all_steps()) in [(), (0,)]):
         raise ValueError(
             f"Log directory {logdir} already exists and contains checkpoints. "
