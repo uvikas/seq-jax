@@ -126,10 +126,10 @@ def make_pool(cfg: ModelConfig, rngs: nnx.Rngs):
         case PoolType.seq:
             return SeqPool(
                 cfg.pool.num_query,
-                cfg.pool.n_layers,
+                cfg.pool.num_blocks,
                 cfg.encoder.embed_dim,
-                cfg.pool.n_heads,
-                cfg.pool.mlp_d,
+                cfg.pool.num_heads,
+                cfg.pool.mlp_ratio,
                 cfg.pool.attn_dropout,
                 cfg.pool.mlp_dropout,
                 flatten_proj=(cfg.name == ModelType.concat),

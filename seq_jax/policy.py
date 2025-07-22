@@ -177,9 +177,9 @@ class PoolType(str, Enum):
 class PoolConfig:
     type: PoolType = PoolType.query
     num_query: int = 16
-    n_layers: int = 4
-    n_heads: int = 12
-    mlp_d: int = 768
+    num_blocks: int = 12
+    num_heads: int = 12
+    mlp_ratio: float = 2.0
     attn_dropout: float = 0.0
     mlp_dropout: float = 0.0
 
@@ -289,43 +289,46 @@ class SeqPool(nnx.Module):
 
     def __init__(
         self,
-        n_tokens: int,
-        n_layers: int,
-        hidden_d: int,
-        n_heads: int,
-        mlp_d: int,
+        num_tokens: int,
+        num_blocks: int,
+        embed_dim: int,
+        num_heads: int,
+        mlp_ratio: float,
         attn_dropout: float,
         mlp_dropout: float,
+        last_layer_norm: bool = False,
         flatten_proj: bool = False,
         layernorm: Callable = partial(nnx.LayerNorm, epsilon=1e-6),
         n_patches: int = 197,
         *,
         rngs: nnx.Rngs,
     ):
-        self.n_tokens = n_tokens
-        self.n_heads = n_heads
+        self.num_tokens = num_tokens
+        self.num_heads = num_heads
         self.summary_tokens = nnx.Param(
-            jax.random.normal(rngs.params(), (1, 1, n_tokens, hidden_d))
+            jax.random.normal(rngs.params(), (1, 1, num_tokens, embed_dim))
         )
         self.pos_embed = nnx.Param(
-            jax.random.normal(rngs.params(), (1, n_tokens + n_patches, hidden_d)) * 0.02
+            jax.random.normal(rngs.params(), (1, num_tokens + n_patches, embed_dim))
+            * 0.02
         )
         self.encoder = TransformerEncoder(
-            n_layers=n_layers,
-            hidden_d=hidden_d,
-            n_heads=n_heads,
-            mlp_d=mlp_d,
+            n_layers=num_blocks,
+            hidden_d=embed_dim,
+            n_heads=num_heads,
+            mlp_d=int(embed_dim * mlp_ratio),
             attn_dropout=attn_dropout,
             mlp_dropout=mlp_dropout,
             layernorm=layernorm,
+            last_layer_norm=last_layer_norm,
             rngs=rngs,
         )
 
         self.flatten_proj = flatten_proj
         if flatten_proj:
             self.out_proj = nnx.Linear(
-                in_features=hidden_d * n_tokens,
-                out_features=hidden_d,
+                in_features=embed_dim * num_tokens,
+                out_features=embed_dim,
                 rngs=rngs,
             )
 
@@ -337,20 +340,20 @@ class SeqPool(nnx.Module):
 
         # summary tokens attend to all
         # input tokens may not attend to summary tokens
-        total_tokens = self.n_tokens + n_input_tokens
+        total_tokens = self.num_tokens + n_input_tokens
         # fully bidirectional attn mask (N+K, N+K)
         mask = jnp.zeros((total_tokens, total_tokens), dtype=bool)
         # (N+K, N+K) -> (B, T, num_heads, N+K, N+K)
         mask = jnp.tile(
             mask[None, None, None, :, :],
-            (batch_sz, seq_len, self.n_heads, 1, 1),
+            (batch_sz, seq_len, self.num_heads, 1, 1),
         )
 
         # (B, T, N+K, C)
         x = x + self.pos_embed
         x = self.encoder(x, attn_mask=mask, rngs=rngs)
         # (B, T, K, C)
-        x = x[:, :, : self.n_tokens, :]
+        x = x[:, :, : self.num_tokens, :]
 
         if self.flatten_proj:
             # (B, T, K, C) -> (B, T, K*C)
