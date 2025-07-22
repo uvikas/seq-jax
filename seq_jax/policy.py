@@ -299,6 +299,7 @@ class SeqPool(nnx.Module):
         mlp_dropout: float,
         flatten_proj: bool = False,
         layernorm: Callable = partial(nnx.LayerNorm, epsilon=1e-6),
+        n_patches: int = 197,
         *,
         rngs: nnx.Rngs,
     ):
@@ -306,6 +307,9 @@ class SeqPool(nnx.Module):
         self.n_heads = n_heads
         self.summary_tokens = nnx.Param(
             jax.random.normal(rngs.params(), (1, 1, n_tokens, hidden_d))
+        )
+        self.pos_embed = nnx.Param(
+            jax.random.normal(rngs.params(), (1, n_tokens + n_patches, hidden_d)) * 0.02
         )
         self.encoder = TransformerEncoder(
             n_layers=n_layers,
@@ -345,6 +349,7 @@ class SeqPool(nnx.Module):
         )
 
         # (B, T, N+K, C)
+        x = x + self.pos_embed
         x = self.encoder(x, attn_mask=mask, rngs=rngs)
         # (B, T, K, C)
         x = x[:, :, : self.n_tokens, :]
@@ -661,9 +666,21 @@ class TransformerMultimodalPolicy(nnx.Module):
         self.tokens_per_mod = tokens_per_mod
         self.output_dims = output_dims
 
+        # (1, T, D)
         self.pos_embed = nnx.Variable(
             jnp.expand_dims(get_1d_sincos_pos_embed(cfg.embed_dim, context_len), axis=0)
         )
+
+        # (1, 1, N, D) * num_mod
+        self.mod_embed = [
+            nnx.Param(
+                jax.random.normal(
+                    rngs.params(), (1, 1, tokens_per_mod[i], cfg.embed_dim)
+                )
+                * 0.02
+            )
+            for i in range(len(tokens_per_mod))
+        ]
 
         self.encoder = TransformerEncoder(
             cfg.num_blocks,
@@ -700,7 +717,16 @@ class TransformerMultimodalPolicy(nnx.Module):
         # assumes all modalities are hidden_d embedded
 
         tokens_per_mod = [obs.shape[-2] for obs in obs_each_mod]
-        # obs_each_mod = [obs + self.pos_embed for obs in obs_each_mod]  # TODO
+
+        # Apply pos embed across time. Tokens in the same timestep get the same pos embed.
+        # pos_embed: (1, T, D) -> (1, T, 1, D)
+        obs_each_mod = [
+            obs + jnp.expand_dims(self.pos_embed, axis=2) for obs in obs_each_mod
+        ]
+
+        # Apply modality embed
+        # mod_embed: (1, 1, N, D)
+        obs_each_mod = [obs + self.mod_embed[i] for i, obs in enumerate(obs_each_mod)]
 
         # List[B, T, N_total, D] * mods -> (B, T, N_total, D)
         x = jnp.concat(obs_each_mod, axis=-2)
