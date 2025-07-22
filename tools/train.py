@@ -226,11 +226,34 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
     params_placeholder = state.params
     state_placeholder = dataclasses.replace(state, params={})
 
+    abstract_params = jax.tree_util.tree_map(
+        ocp.utils.to_shape_dtype_struct, params_placeholder
+    )
+    abstract_state = jax.tree_util.tree_map(
+        ocp.utils.to_shape_dtype_struct, state_placeholder
+    )
+
     restored = ckptr.restore(
         step=None,
         args=ocp.args.Composite(
-            params=ocp.args.PyTreeRestore(item=params_placeholder),
-            train_state=ocp.args.PyTreeRestore(item=state_placeholder),
+            params=ocp.args.PyTreeRestore(
+                item=params_placeholder,
+                restore_args=jax.tree.map(
+                    lambda s: ocp.ArrayRestoreArgs(
+                        restore_type=jax.Array, sharding=s.sharding
+                    ),
+                    abstract_params,
+                ),
+            ),
+            train_state=ocp.args.PyTreeRestore(
+                item=state_placeholder,
+                restore_args=jax.tree.map(
+                    lambda s: ocp.ArrayRestoreArgs(
+                        restore_type=jax.Array, sharding=s.sharding
+                    ),
+                    abstract_state,
+                ),
+            ),
         ),
     )
     restored_state = restored["train_state"]
