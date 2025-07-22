@@ -223,16 +223,20 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
         # No checkpoints saved, so we can't restore
         return state
 
-    params = state.params
-    state = dataclasses.replace(state, params={})
-    restored = ckptr.restore(step=None, items={"train_state": state, "params": params})
-    restored_state = restored["train_state"]
-    step = restored_state.step
-    restored_state = dataclasses.replace(
-        restored_state, params=restored["params"], step=step + 1
-    )
+    params_placeholder = state.params
+    state_placeholder = dataclasses.replace(state, params={})
 
-    print(f"Restored training state from checkpoint at step {step}")
+    restored = ckptr.restore(
+        step=None,
+        args=ocp.args.Composite(
+            params=ocp.args.PyTreeRestore(item=params_placeholder),
+            train_state=ocp.args.PyTreeRestore(item=state_placeholder),
+        ),
+    )
+    restored_state = restored["train_state"]
+    restored_state = dataclasses.replace(restored_state, params=restored["params"])
+
+    print(f"Restored training state from checkpoint at step {restored_state.step}")
     return restored_state
 
 
