@@ -177,7 +177,8 @@ class PoolType(str, Enum):
 class PoolConfig:
     type: PoolType = PoolType.query
     num_query: int = 16
-    num_blocks: int = 12
+    num_blocks: int = 4
+    embed_dim: int = 768
     num_heads: int = 12
     mlp_ratio: float = 2.0
     attn_dropout: float = 0.0

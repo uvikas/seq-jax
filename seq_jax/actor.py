@@ -127,7 +127,7 @@ def make_pool(cfg: ModelConfig, rngs: nnx.Rngs):
             return SeqPool(
                 cfg.pool.num_query,
                 cfg.pool.num_blocks,
-                cfg.encoder.embed_dim,
+                cfg.pool.embed_dim,
                 cfg.pool.num_heads,
                 cfg.pool.mlp_ratio,
                 cfg.pool.attn_dropout,
