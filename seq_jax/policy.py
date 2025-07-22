@@ -283,9 +283,8 @@ class QueryPool(nnx.Module):
 
 
 class SeqPool(nnx.Module):
-    """Pool latent features using `n_tokens` extra summary tokens in-sequence
-
-    The summary tokens attend to all input tokens, but input tokens may not attend to summary tokens.
+    """
+    Pool latent features using `n_tokens` extra summary tokens in-sequence
     """
 
     def __init__(
@@ -339,9 +338,8 @@ class SeqPool(nnx.Module):
         # summary tokens attend to all
         # input tokens may not attend to summary tokens
         total_tokens = self.n_tokens + n_input_tokens
-        # (N+K, N+K)
+        # fully bidirectional attn mask (N+K, N+K)
         mask = jnp.zeros((total_tokens, total_tokens), dtype=bool)
-        mask = mask.at[self.n_tokens :, : self.n_tokens].set(True)
         # (N+K, N+K) -> (B, T, num_heads, N+K, N+K)
         mask = jnp.tile(
             mask[None, None, None, :, :],
