@@ -326,6 +326,7 @@ class TransformerMultimodalActor(nnx.Module):
             cfg.pred_len,
             self.tokens_per_mod,
             self.out_dims,
+            cfg.pool.embed_dim,
             cfg.policy,
             rngs=rngs,
         )

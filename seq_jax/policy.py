@@ -161,6 +161,49 @@ class MLP(nnx.Module):
         return self.net(x)
 
 
+class TokenwiseMLP(nnx.Module):
+    """MLP that operates on each token independently."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        num_tokens: int,
+        output_dim: int,
+        hidden_sizes: List[int] = [],
+        stable_init: bool = False,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.input_dim = input_dim
+        self.num_tokens = num_tokens
+        self.output_dim = output_dim
+        self.hidden_sizes = hidden_sizes
+        self.stable_init = stable_init
+
+        self.mlps = [
+            MLP(
+                input_dim=input_dim,
+                output_dim=output_dim,
+                hidden_sizes=hidden_sizes,
+                stable_init=stable_init,
+                rngs=rngs,
+            )
+            for _ in range(num_tokens)
+        ]
+
+    def __call__(self, x: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
+        # x: (B, T, N, C)
+        out = []
+        for i in range(self.num_tokens):
+            # (B, T, C)
+            token_x = x[:, :, i, :]
+            # (B, T, output_dim)
+            token_out = self.mlps[i](token_x, rngs=rngs)
+            out.append(token_out)
+        # (B, T, N, output_dim)
+        return jnp.stack(out, axis=2)
+
+
 ################################################################################
 #                                                                              #
 #                                 Pooling                                      #
@@ -655,7 +698,8 @@ class TransformerMultimodalPolicy(nnx.Module):
         context_len: int,
         pred_len: int,
         tokens_per_mod: List[int],
-        output_dims: List[int],
+        out_dims: List[int],
+        inp_embed_dim: int,
         cfg: TransformerPolicyConfig,
         *,
         rngs: nnx.Rngs,
@@ -663,24 +707,18 @@ class TransformerMultimodalPolicy(nnx.Module):
         self.context_len = context_len
         self.pred_len = pred_len
         self.multihead_proj = cfg.multihead_proj
-        self.tokens_per_mod = tokens_per_mod
-        self.output_dims = output_dims
 
         # (1, T, D)
         self.pos_embed = nnx.Variable(
             jnp.expand_dims(get_1d_sincos_pos_embed(cfg.embed_dim, context_len), axis=0)
         )
 
-        # (1, 1, N, D) * num_mod
-        self.mod_embed = [
-            nnx.Param(
-                jax.random.normal(
-                    rngs.params(), (1, 1, tokens_per_mod[i], cfg.embed_dim)
-                )
-                * 0.02
-            )
-            for i in range(len(tokens_per_mod))
-        ]
+        self.in_projs = TokenwiseMLP(
+            inp_embed_dim,
+            sum(tokens_per_mod),
+            cfg.embed_dim,
+            rngs=rngs,
+        )
 
         self.encoder = TransformerEncoder(
             cfg.num_blocks,
@@ -697,12 +735,12 @@ class TransformerMultimodalPolicy(nnx.Module):
             [
                 MLP(
                     cfg.embed_dim,
-                    output_dims[i],
+                    out_dims[i],
                     rngs=rngs,
                 )
                 for _ in range(pred_len)
             ]
-            for i in range(len(output_dims))
+            for i in range(len(out_dims))
         ]
 
     def __call__(
@@ -717,18 +755,14 @@ class TransformerMultimodalPolicy(nnx.Module):
 
         tokens_per_mod = [obs.shape[-2] for obs in obs_each_mod]
 
-        # Apply pos embed across time. Tokens in the same timestep get the same pos embed.
-        # pos_embed: (1, T, D) -> (1, T, 1, D)
-        obs_each_mod = [
-            obs + jnp.expand_dims(self.pos_embed, axis=2) for obs in obs_each_mod
-        ]
-
-        # Apply modality embed
-        # mod_embed: (1, 1, N, D)
-        obs_each_mod = [obs + self.mod_embed[i] for i, obs in enumerate(obs_each_mod)]
-
         # List[B, T, N_total, D] * mods -> (B, T, N_total, D)
         x = jnp.concat(obs_each_mod, axis=-2)
+        x = self.in_projs(x, rngs=rngs)
+
+        # Apply pos embed across time. Tokens in the same timestep get the same pos embed.
+        # pos_embed: (1, T, D) -> (1, T, 1, D)
+        x = x + jnp.expand_dims(self.pos_embed, axis=2)
+
         batch_sz, ctx_len, n_token_per_step, hidden_d = x.shape
         # (B, T, N_total, D) -> (B, T * N_total, D)
         x = jnp.reshape(x, (x.shape[0], -1, *x.shape[3:]))
