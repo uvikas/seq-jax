@@ -598,7 +598,6 @@ class TransformerConcatPolicy(nnx.Module):
                     cfg.embed_dim,
                     sum(self.output_dim),
                     cfg.head_hidden_sizes,
-                    stable_init=True,
                     rngs=rngs,
                 )
                 for _ in range(pred_len)
@@ -608,7 +607,6 @@ class TransformerConcatPolicy(nnx.Module):
                 cfg.embed_dim,
                 sum(self.output_dim),
                 cfg.head_hidden_sizes,
-                stable_init=True,
                 rngs=rngs,
             )
 
@@ -700,7 +698,6 @@ class TransformerMultimodalPolicy(nnx.Module):
                 MLP(
                     cfg.embed_dim,
                     output_dims[i],
-                    stable_init=True,
                     rngs=rngs,
                 )
                 for _ in range(pred_len)
