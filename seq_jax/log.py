@@ -19,6 +19,7 @@ class WandbConfig:
     project: str = "seq-jax"
     entity: str = "my-gcp-project"
     mode: str = "disabled"
+    notes: str = ""
 
 
 @dataclass
@@ -67,6 +68,7 @@ def init_wandb(cfg: "TrainConfig"):
             id=run_id,
             resume="must",
             project=cfg.log.wandb.project,
+            notes=cfg.log.wandb.notes,
         )
     else:
         wandb.init(
@@ -76,6 +78,7 @@ def init_wandb(cfg: "TrainConfig"):
             entity=cfg.log.wandb.entity,
             config=asdict(cfg),
             mode=cfg.log.wandb.mode,
+            notes=cfg.log.wandb.notes,
         )
         with open(run_id_file, "w") as f:
             f.write(wandb.run.id)
