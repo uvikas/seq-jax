@@ -402,6 +402,8 @@ class TransformerMultimodalActor(nnx.Module):
             # (B, T, D) -> (B, T, 1, D)
             pooled_feats = [pooled_feat[:, :, None, :] for pooled_feat in pooled_feats]
 
+        return pooled_feats
+
     def sample_actions(self, obs: Observation, *, rngs: nnx.Rngs) -> Prediction:
         attn_mask = make_block_attn_mask(
             obs.mask,
