@@ -166,7 +166,7 @@ class TokenwiseMLP(nnx.Module):
 
     def __init__(
         self,
-        input_dim: int,
+        input_dims: List[int],
         num_tokens: int,
         output_dim: int,
         hidden_sizes: List[int] = [],
@@ -174,7 +174,7 @@ class TokenwiseMLP(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
-        self.input_dim = input_dim
+        self.input_dims = input_dims
         self.num_tokens = num_tokens
         self.output_dim = output_dim
         self.hidden_sizes = hidden_sizes
@@ -182,21 +182,23 @@ class TokenwiseMLP(nnx.Module):
 
         self.mlps = [
             MLP(
-                input_dim=input_dim,
+                input_dim=input_dims[i],
                 output_dim=output_dim,
                 hidden_sizes=hidden_sizes,
                 stable_init=stable_init,
                 rngs=rngs,
             )
-            for _ in range(num_tokens)
+            for i in range(num_tokens)
         ]
 
     def __call__(self, x: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
-        # x: (B, T, N, C)
+        # x: [B, T, C] * N
+        assert len(x) == self.num_tokens
+
         out = []
         for i in range(self.num_tokens):
-            # (B, T, C)
-            token_x = x[:, :, i, :]
+            # [B, T, C]
+            token_x = x[i]
             # (B, T, output_dim)
             token_out = self.mlps[i](token_x, rngs=rngs)
             out.append(token_out)
@@ -705,8 +707,8 @@ class TransformerMultimodalPolicy(nnx.Module):
         context_len: int,
         pred_len: int,
         tokens_per_mod: List[int],
+        inp_dims: List[int],
         out_dims: List[int],
-        inp_embed_dim: int,
         cfg: TransformerPolicyConfig,
         *,
         rngs: nnx.Rngs,
@@ -720,8 +722,13 @@ class TransformerMultimodalPolicy(nnx.Module):
             jnp.expand_dims(get_1d_sincos_pos_embed(cfg.embed_dim, context_len), axis=0)
         )
 
+        # List[D] * num_mod
+        inp_embed_dims = []
+        for tokens, dim in zip(tokens_per_mod, inp_dims):
+            inp_embed_dims.extend([dim] * tokens)
+
         self.in_projs = TokenwiseMLP(
-            inp_embed_dim,
+            inp_embed_dims,
             sum(tokens_per_mod),
             cfg.embed_dim,
             rngs=rngs,
@@ -762,9 +769,14 @@ class TransformerMultimodalPolicy(nnx.Module):
 
         tokens_per_mod = [obs.shape[-2] for obs in obs_each_mod]
 
-        # List[B, T, N_total, D] * mods -> (B, T, N_total, D)
-        x = jnp.concat(obs_each_mod, axis=-2)
-        x = self.in_projs(x, rngs=rngs)
+        # List[B, T, N_total, D_i] * mods -> (B, T, D_i) * N_total
+        token_list = [
+            mod_tokens[:, :, i, :]
+            for mod_tokens in obs_each_mod
+            for i in range(mod_tokens.shape[-2])
+        ]
+        # List[B, T, D_i] * N_total -> (B, T, N_total, D)
+        x = self.in_projs(token_list, rngs=rngs)
 
         # Apply pos embed across time. Tokens in the same timestep get the same pos embed.
         # pos_embed: (1, T, D) -> (1, T, 1, D)
@@ -794,6 +806,6 @@ class TransformerMultimodalPolicy(nnx.Module):
         ]
         return Prediction(
             img_pooled=out_each_mod[:3],
-            state=out_each_mod[3].squeeze(axis=-2),
-            action=out_each_mod[4].squeeze(axis=-2),
+            state=None,
+            action=out_each_mod[3].squeeze(axis=-2),
         )

@@ -304,21 +304,17 @@ class TransformerMultimodalActor(nnx.Module):
 
         # flatten_proj means 1 token per image
         im_tokens = cfg.pool.num_query if not cfg.pool.flatten_proj else 1
-        # 3 images, 1 state, 1 action
-        self.tokens_per_mod = (im_tokens,) * cfg.num_cams + (1,) + (1,)
+        # 3 images, 1 state
+        self.tokens_per_mod = (im_tokens,) * cfg.num_cams + (1,)  # + (1,)
         self.block_size = sum(self.tokens_per_mod)
-        # 3 images, 1 state, 1 action
-        self.out_dims = (
-            (cfg.policy.embed_dim,) * cfg.num_cams + (cfg.dofs,) + (cfg.dofs,)
-        )
+        # 3 images, 1 action
+        self.inp_dims = (cfg.pool.embed_dim,) * cfg.num_cams + (cfg.policy.embed_dim,)
+        self.out_dims = (cfg.policy.embed_dim,) * cfg.num_cams + (
+            cfg.dofs,
+        )  # + (cfg.dofs,)
 
         self.img_encoder = VisionEncoder(cfg.encoder, rngs=rngs)
         self.state_encoder = MLP(
-            cfg.dofs,
-            cfg.policy.embed_dim,
-            rngs=rngs,
-        )
-        self.action_encoder = MLP(
             cfg.dofs,
             cfg.policy.embed_dim,
             rngs=rngs,
@@ -328,18 +324,10 @@ class TransformerMultimodalActor(nnx.Module):
             cfg.context_len,
             cfg.pred_len,
             self.tokens_per_mod,
+            self.inp_dims,
             self.out_dims,
-            cfg.pool.embed_dim,
             cfg.policy,
             rngs=rngs,
-        )
-
-        self.action_token = nnx.Param(
-            jax.random.normal(
-                rngs.params(),
-                (1, 1, 1, cfg.policy.embed_dim),
-            )
-            * 0.02
         )
 
     def compute_loss(
@@ -386,11 +374,9 @@ class TransformerMultimodalActor(nnx.Module):
         state_embed = self.state_encoder(
             policy_in.noisy_state[:, :, None, :], rngs=rngs
         )
-        # (1, 1, D) -> (B, T, 1, D)
-        action_token = jnp.broadcast_to(self.action_token, state_embed.shape)
 
         # Tokens per mod List[B, T, N, D] * num_mod
-        obs_each_mod = img_pooled + [state_embed, action_token]
+        obs_each_mod = img_pooled + [state_embed]
 
         # Predict actions + compute loss
         pred_act = self.policy(obs_each_mod, attn_mask, rngs=rngs)
@@ -425,8 +411,7 @@ class TransformerMultimodalActor(nnx.Module):
         )
 
         state_embed = self.state_encoder(obs.state[:, :, None, :], rngs=rngs)
-        action_token = jnp.broadcast_to(self.action_token, state_embed.shape)
-        obs_each_mod = obs.img_pooled + [state_embed, action_token]
+        obs_each_mod = obs.img_pooled + [state_embed]
 
         # Predict actions
         pred_act = self.policy(obs_each_mod, attn_mask, rngs=rngs)
