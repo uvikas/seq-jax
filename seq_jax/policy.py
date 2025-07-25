@@ -219,6 +219,7 @@ class PoolType(str, Enum):
 @dataclass
 class PoolConfig:
     type: PoolType = PoolType.query
+    flatten_proj: bool = False
     num_query: int = 16
     num_blocks: int = 4
     embed_dim: int = 768
@@ -239,6 +240,7 @@ class QueryPool(nnx.Module):
         head_dim: int = 64,
         qkv_bias: bool = True,
         drop: float = 0.0,
+        flatten_proj: bool = False,
         *,
         rngs: nnx.Rngs,
     ):
@@ -253,6 +255,7 @@ class QueryPool(nnx.Module):
         self.num_heads = input_dim // head_dim
         self.scale = head_dim ** (-0.5)
         self.drop = drop
+        self.flatten_proj = flatten_proj
 
         # learnable query: (1, num_query, num_heads, head_dim)
         self.q = nnx.Param(
@@ -273,18 +276,19 @@ class QueryPool(nnx.Module):
             ),
         )
 
-        self.proj_1 = nnx.Linear(
-            in_features=input_dim * num_query,
-            out_features=output_dim * 4,
-            rngs=rngs,
-        )
-        self.proj_2 = nnx.Linear(
-            in_features=output_dim * 4,
-            out_features=output_dim,
-            rngs=rngs,
-        )
-        self.act = partial(nnx.gelu, approximate=False)
-        self.proj_drop = nnx.Dropout(rate=drop)
+        if flatten_proj:
+            self.proj_1 = nnx.Linear(
+                in_features=input_dim * num_query,
+                out_features=output_dim * 4,
+                rngs=rngs,
+            )
+            self.proj_2 = nnx.Linear(
+                in_features=output_dim * 4,
+                out_features=output_dim,
+                rngs=rngs,
+            )
+            self.act = partial(nnx.gelu, approximate=False)
+            self.proj_drop = nnx.Dropout(rate=drop)
 
     def __call__(self, im_emb: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
         """
@@ -315,13 +319,16 @@ class QueryPool(nnx.Module):
 
         # reshape back to (b, T, num_query * C)
         out = jnp.transpose(weighted, (0, 2, 1, 3))  # (B, num_query, heads, head_dim)
-        out = out.reshape((b, T, self.num_query * C))
 
         # MLP head + dropout
-        out = self.proj_1(out)
-        out = self.act(out)
-        out = self.proj_2(out)
-        out = self.proj_drop(out, rngs=rngs)
+        if self.flatten_proj:
+            out = out.reshape((b, T, self.num_query * C))
+            out = self.proj_1(out)
+            out = self.act(out)
+            out = self.proj_2(out)
+            out = self.proj_drop(out, rngs=rngs)
+        else:
+            out = out.reshape((b, T, self.num_query, C))
 
         return out
 

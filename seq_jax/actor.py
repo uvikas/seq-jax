@@ -121,6 +121,7 @@ def make_pool(cfg: ModelConfig, rngs: nnx.Rngs):
                 cfg.encoder.embed_dim,
                 cfg.policy.embed_dim,
                 cfg.pool.num_query,
+                flatten_proj=cfg.pool.flatten_proj,
                 rngs=rngs,
             )
         case PoolType.seq:
@@ -132,7 +133,7 @@ def make_pool(cfg: ModelConfig, rngs: nnx.Rngs):
                 cfg.pool.mlp_ratio,
                 cfg.pool.attn_dropout,
                 cfg.pool.mlp_dropout,
-                flatten_proj=(cfg.name == ModelType.concat),
+                flatten_proj=cfg.pool.flatten_proj,
                 rngs=rngs,
             )
         case _:
@@ -301,8 +302,10 @@ class TransformerMultimodalActor(nnx.Module):
         self.context_len = cfg.context_len
         self.pred_len = cfg.pred_len
 
+        # flatten_proj means 1 token per image
+        im_tokens = cfg.pool.num_query if not cfg.pool.flatten_proj else 1
         # 3 images, 1 state, 1 action
-        self.tokens_per_mod = (cfg.pool.num_query,) * cfg.num_cams + (1,) + (1,)
+        self.tokens_per_mod = (im_tokens,) * cfg.num_cams + (1,) + (1,)
         self.block_size = sum(self.tokens_per_mod)
         # 3 images, 1 state, 1 action
         self.out_dims = (
@@ -407,28 +410,26 @@ class TransformerMultimodalActor(nnx.Module):
     def pool_feats(
         self, feat: List[jnp.ndarray], *, rngs: nnx.Rngs
     ) -> List[jnp.ndarray]:
-        # (B, T, N, D) * num_cams
-        return [pool(f, rngs=rngs) for f, pool in zip(feat, self.attn_pool)]
+        # Returns (B, T, N, D) * num_cams
+        pooled_feats = [pool(f, rngs=rngs) for f, pool in zip(feat, self.attn_pool)]
+        if self.cfg.pool.flatten_proj:
+            # (B, T, D) -> (B, T, 1, D)
+            pooled_feats = [pooled_feat[:, :, None, :] for pooled_feat in pooled_feats]
 
     def sample_actions(self, obs: Observation, *, rngs: nnx.Rngs) -> Prediction:
-        attn_mask = make_attn_mask(
-            obs.mask, self.cfg.policy.num_heads, causal=self.cfg.policy.causal
+        attn_mask = make_block_attn_mask(
+            obs.mask,
+            self.cfg.policy.num_heads,
+            self.block_size,
+            causal=self.cfg.policy.causal,
         )
 
-        # Concat + normalize
-        obs_cat = jnp.concatenate(
-            obs.img_pooled
-            + [
-                obs.state,
-                # obs.prev_action,
-            ],
-            axis=-1,
-        )
-        # (B, T, D) -> (T, B, D)
-        obs_cat = obs_cat.transpose(1, 0, 2)
+        state_embed = self.state_encoder(obs.state[:, :, None, :], rngs=rngs)
+        action_token = jnp.broadcast_to(self.action_token, state_embed.shape)
+        obs_each_mod = obs.img_pooled + [state_embed, action_token]
 
         # Predict actions
-        pred_act = self.policy(obs_cat, attn_mask, rngs=rngs)
+        pred_act = self.policy(obs_each_mod, attn_mask, rngs=rngs)
         return pred_act.action
 
     def encode_im(self, ims: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
