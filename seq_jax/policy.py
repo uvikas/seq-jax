@@ -584,7 +584,7 @@ class TransformerEncoder(nnx.Module):
 @dataclass
 class TransformerPolicyConfig:
     causal: bool = True
-    in_proj_hidden_sizes: List[int] = field(default_factory=lambda: [512])
+    in_proj_hidden_sizes: List[int] = field(default_factory=lambda: [1024])
     embed_dim: int = 768
     num_blocks: int = 12
     num_heads: int = 12
