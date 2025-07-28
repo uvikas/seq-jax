@@ -314,7 +314,7 @@ class TransformerMultimodalActor(nnx.Module):
         )  # + (cfg.dofs,)
 
         self.encoder_dtype = (
-            jnp.float16 if cfg.encoder.dtype == "float16" else jnp.float32
+            jnp.bfloat16 if cfg.encoder.dtype == "bfloat16" else jnp.float32
         )
         self.img_encoder = VisionEncoder(cfg.encoder, rngs=rngs)
         self.state_encoder = MLP(

@@ -541,10 +541,10 @@ def vit_b16(
     state_restored = ckptr.restore(pretrained, other_state)
 
     # Optionally cast restored arrays to fp16 for reduced memory footprint
-    if dtype == "float16":
+    if dtype == "bfloat16":
         state_restored = jax.tree.map(
             lambda x: (
-                x.astype(jnp.float16)
+                x.astype(jnp.bfloat16)
                 if isinstance(x, jax.Array) and x.dtype == jnp.float32
                 else x
             ),
@@ -593,10 +593,10 @@ def vit_l16(
         other_state,
     )
     state_restored = ckptr.restore(pretrained, other_state)
-    if dtype == "float16":
+    if dtype == "bfloat16":
         state_restored = jax.tree.map(
             lambda x: (
-                x.astype(jnp.float16)
+                x.astype(jnp.bfloat16)
                 if isinstance(x, jax.Array) and x.dtype == jnp.float32
                 else x
             ),
