@@ -109,7 +109,6 @@ class PatchEmbed(nnx.Module):
             x = x.reshape(B, self.embed_dim, -1).transpose(
                 (0, 2, 1)
             )  # NCHW -> B C (H*W) -> B (H*W) C
-
         x = self.norm(x, rngs=rngs)
         return x
 
@@ -539,6 +538,43 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
     return model
 
 
+def vit_l16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtractor:
+    scratch = pretrained.endswith("none")
+    assert scratch or os.path.exists(pretrained)
+    model_kwargs = dict(
+        img_size=256,
+        patch_size=16,
+        embed_dim=1024,
+        depth=24,
+        num_heads=16,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=partial(nnx.LayerNorm, epsilon=1e-6),
+        **kwargs,
+    )
+    # model = VisionTransformerExtractor(**model_kwargs, rngs=rngs)
+
+    ckptr = ocp.StandardCheckpointer()
+    abstract_model = nnx.eval_shape(
+        lambda: VisionTransformerExtractor(**model_kwargs, rngs=nnx.Rngs(0))
+    )
+    graphdef, other_state = nnx.split(abstract_model)
+
+    # Restore checkpoint on a single device (device 0)
+    single_device_sharding = SingleDeviceSharding(jax.local_devices()[0])
+    other_state = jax.tree.map(
+        lambda a: jax.ShapeDtypeStruct(
+            a.shape, a.dtype, sharding=single_device_sharding
+        ),
+        other_state,
+    )
+    state_restored = ckptr.restore(pretrained, other_state)
+    model = nnx.merge(graphdef, state_restored)
+    print("Loaded encoder from: {}".format(pretrained))
+
+    return model
+
+
 ################################################################################
 # RegNet
 ################################################################################
@@ -576,6 +612,9 @@ class VisionEncoder(nnx.Module):
             case "vitb-mae-egosoup":
                 self.backbone = vit_b16(pretrain_path, rngs=rngs, **kwargs)
                 self.emb_dim = 768
+            case "vitl-mae-egosoup":
+                self.backbone = vit_l16(pretrain_path, rngs=rngs, **kwargs)
+                self.emb_dim = 1024
             case _:
                 raise NotImplementedError(f"Unknown model name: {cfg.name}")
 

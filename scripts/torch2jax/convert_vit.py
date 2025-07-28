@@ -308,15 +308,17 @@ class Torch2Flax:
 def convert_total():
     t2f = Torch2Flax()
 
+    name = "vitl-mae-egosoup"
+
     torch_model = vit_torch.Encoder(
-        "vitb-mae-egosoup", "/path/to/pretrained/encoders"
+        name, "/path/to/pretrained/encoders"
     ).backbone
 
     key = jax.random.key(0)
     init_rngs = nnx.Rngs(params=key, dropout=key)
     jax_model = vit_jax.VisionEncoder(
         vit_jax.VisionEncoderConfig(
-            name="vitb-mae-egosoup",
+            name=name,
             pretrain_dir="/path/to/pretrained/encoders_jax",
         ),
         rngs=init_rngs,
@@ -325,7 +327,7 @@ def convert_total():
     print("copying torch -> jax")
     t2f.copy_module(torch_model, jax_model)
 
-    CKPT_DIR = "/tmp/jax_encoder/"
+    CKPT_DIR = f"/tmp/{name}-jax/"
     ckptr = ocp.PyTreeCheckpointer()
     ckptr.save(CKPT_DIR, nnx.state(jax_model), force=True)
 
