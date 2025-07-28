@@ -189,7 +189,7 @@ def pack_batch(
             prev_action=actions,
             mask=masks,
         )
-    elif vision_format == "mp4":
+    elif vision_format == "rgb":
         # (B, T, V, H, W, 3) -> (B, T, V, 3, H, W)
         vision = vision.transpose(0, 1, 2, 5, 3, 4)
         obs = Observation(
