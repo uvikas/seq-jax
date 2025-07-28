@@ -9,6 +9,7 @@ import jax
 import decimal
 import simplejson
 import time
+import jax.numpy as jnp
 
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict, deque
@@ -34,7 +35,7 @@ class ProfilerConfig:
 @dataclass
 class LoggingConfig:
     save_freq: int = 1000
-    log_freq: int = 20
+    log_freq: int = 50
     losses: List[str] = field(
         default_factory=lambda: [
             "action_loss",
@@ -137,6 +138,18 @@ def dump_json_stats(stats, stats_type):
     stats = float_to_decimal(stats)
     stats_json = simplejson.dumps(stats, sort_keys=True, use_decimal=True)
     return "{:s}: {:s}".format(stats_type, stats_json)
+
+
+def cos_sim_grad(
+    current_grad,
+    grad_deque: deque,
+    eps: float = 1e-8,
+) -> jnp.ndarray:
+    cur_norm = jnp.linalg.norm(current_grad)
+    flats = jnp.stack(grad_deque)  # (H, D)
+    dots = flats @ current_grad  # (H,)
+    norms = jnp.linalg.norm(flats, axis=1) * cur_norm + eps
+    return jnp.mean(dots / norms)  # (H,)
 
 
 class Timer:
@@ -272,6 +285,7 @@ class IterTrainMeter(object):
         self.batch_size = 0
         self.prefetched_size = 0
         self.num_samples = 0
+        self.grads = deque(maxlen=1)
 
         self.timer = TimerMeter()
 
@@ -305,6 +319,9 @@ class IterTrainMeter(object):
         self.grad_norm = metrics["grad_norm"]
         self.param_norm = metrics["param_norm"]
 
+        self.sim = cos_sim_grad(metrics["grad"], self.grads)
+        self.grads.append(metrics["grad"])
+
     def get_iter_stats(self, cur_iter: int):
         cur_iter_total = cur_iter + 1
         eta_sec = self.iter_timer.sliding_average_time * (
@@ -320,6 +337,7 @@ class IterTrainMeter(object):
             "batch_sz": self.batch_size,
             "grad_norm": self.grad_norm,
             "param_norm": self.param_norm,
+            "grad_cos_sim": self.sim,
         }
 
         loss_stats = {
@@ -349,6 +367,7 @@ class IterTrainMeter(object):
                     "train/lr": stats["lr"],
                     "train/grad_norm": stats["grad_norm"],
                     "train/param_norm": stats["param_norm"],
+                    "train/grad_cos_sim": stats["grad_cos_sim"],
                 }
                 | {f"train/iter_{name}": loss_stats[name] for name in self.loss_names}
                 | {

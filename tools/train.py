@@ -284,7 +284,6 @@ def save_state(
     ckptr: ocp.CheckpointManager,
     state: TrainState,
     step: int,
-    gcs_path: str | None = None,
     wait: bool = False,
 ):
 
@@ -302,7 +301,7 @@ def save_state(
         },
     )
 
-    if wait or gcs_path:
+    if wait:
         ckptr.wait_until_finished()
 
 
@@ -350,6 +349,7 @@ def train_step(
     # Create metrics with minimal array allocations
     metrics = {
         "loss": loss_dict,
+        "grad": jax.flatten_util.ravel_pytree(grads)[0],
         "grad_norm": jnp.array([optax.global_norm(clipped_grads)]),
         "step": jnp.array([state.step]),
         "param_norm": optax.global_norm(new_params),
@@ -445,7 +445,11 @@ def train(cfg: TrainConfig):
 
         with meter.timer("metrics"):
             metrics = {
-                key: value.item() if isinstance(value, jnp.ndarray) else value
+                key: (
+                    value.item()
+                    if isinstance(value, jnp.ndarray) and value.ndim == 1
+                    else value
+                )
                 for key, value in metrics.items()
             }
             metrics["loss"] = {
@@ -468,7 +472,6 @@ def train(cfg: TrainConfig):
                     ckptr,
                     state,
                     step,
-                    gcs_path=cfg.log.gcs_ckpt,
                     wait=(step == cfg.optim.num_steps - 1),
                 )
 
