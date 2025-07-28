@@ -119,7 +119,7 @@ def make_pool(cfg: ModelConfig, rngs: nnx.Rngs):
         case PoolType.query:
             return QueryPool(
                 cfg.encoder.embed_dim,
-                cfg.policy.embed_dim,
+                cfg.pool.embed_dim,
                 cfg.pool.num_query,
                 flatten_proj=cfg.pool.flatten_proj,
                 rngs=rngs,
