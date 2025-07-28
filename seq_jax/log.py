@@ -318,8 +318,7 @@ class IterTrainMeter(object):
         self.batch_size = metrics["batch_size"]
         self.grad_norm = metrics["grad_norm"]
         self.param_norm = metrics["param_norm"]
-
-        self.sim = cos_sim_grad(metrics["grad"], self.grads)
+        self.sim = cos_sim_grad(metrics["grad"], self.grads) if self.grads else 0
         self.grads.append(metrics["grad"])
 
     def get_iter_stats(self, cur_iter: int):
