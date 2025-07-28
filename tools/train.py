@@ -432,7 +432,12 @@ def train(cfg: TrainConfig):
             # Get next batch
             while True:
                 data = next(dataloader)
-                if not jnp.isnan(data[0].img_feat).any():
+                if (
+                    data[0].img_feat is not None
+                    and not jnp.isnan(data[0].img_feat).any()
+                ) or (
+                    data[0].img_rgb is not None and not jnp.isnan(data[0].img_rgb).any()
+                ):
                     break
 
             if step == start_step:
