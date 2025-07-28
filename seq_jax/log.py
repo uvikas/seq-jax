@@ -149,7 +149,7 @@ def cos_sim_grad(
     flats = jnp.stack(grad_deque)  # (H, D)
     dots = flats @ current_grad  # (H,)
     norms = jnp.linalg.norm(flats, axis=1) * cur_norm + eps
-    return jnp.mean(dots / norms)  # (H,)
+    return jnp.mean(dots / norms).item()  # (H,)
 
 
 class Timer:
