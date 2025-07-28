@@ -436,7 +436,8 @@ def train(cfg: TrainConfig):
                     data[0].img_feat is not None
                     and not jnp.isnan(data[0].img_feat).any()
                 ) or (
-                    data[0].img_rgb is not None and not jnp.isnan(data[0].img_rgb).any()
+                    data[0].img_rgb is not None
+                    and not any(jnp.isnan(img).any() for img in data[0].img_rgb)
                 ):
                     break
 

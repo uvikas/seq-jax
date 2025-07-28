@@ -335,7 +335,7 @@ class TorchDataLoader:
                         )
                         or (
                             batch[0].img_rgb is not None
-                            and jnp.isnan(batch[0].img_rgb).any()
+                            and any(jnp.isnan(img).any() for img in batch[0].img_rgb)
                         )
                         or jnp.isnan(batch[0].state).any()
                         or jnp.isnan(batch[0].noisy_state).any()
