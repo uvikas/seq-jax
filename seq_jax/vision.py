@@ -501,7 +501,13 @@ _MODELS = {
 }
 
 
-def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtractor:
+def vit_b16(
+    pretrained: str,
+    dtype: str = "float32",
+    *,
+    rngs: nnx.Rngs,
+    **kwargs,
+) -> VisionTransformerExtractor:
     scratch = pretrained.endswith("none")
     assert scratch or os.path.exists(pretrained)
     model_kwargs = dict(
@@ -532,13 +538,30 @@ def vit_b16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
         other_state,
     )
     state_restored = ckptr.restore(pretrained, other_state)
+
+    # Optionally cast restored arrays to fp16 for reduced memory footprint
+    if dtype == "float16":
+        state_restored = jax.tree.map(
+            lambda x: (
+                x.astype(jnp.float16)
+                if isinstance(x, jax.Array) and x.dtype == jnp.float32
+                else x
+            ),
+            state_restored,
+        )
     model = nnx.merge(graphdef, state_restored)
     print("Loaded encoder from: {}".format(pretrained))
 
     return model
 
 
-def vit_l16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtractor:
+def vit_l16(
+    pretrained: str,
+    dtype: str = "float32",
+    *,
+    rngs: nnx.Rngs,
+    **kwargs,
+) -> VisionTransformerExtractor:
     scratch = pretrained.endswith("none")
     assert scratch or os.path.exists(pretrained)
     model_kwargs = dict(
@@ -569,6 +592,15 @@ def vit_l16(pretrained: str, rngs: nnx.Rngs, **kwargs) -> VisionTransformerExtra
         other_state,
     )
     state_restored = ckptr.restore(pretrained, other_state)
+    if dtype == "float16":
+        state_restored = jax.tree.map(
+            lambda x: (
+                x.astype(jnp.float16)
+                if isinstance(x, jax.Array) and x.dtype == jnp.float32
+                else x
+            ),
+            state_restored,
+        )
     model = nnx.merge(graphdef, state_restored)
     print("Loaded encoder from: {}".format(pretrained))
 
@@ -592,7 +624,6 @@ class VisionEncoderConfig:
     im_dim: int = 224
     embed_dim: int = 768
     dtype: str = "float32"
-    feat_dtype: str = "float16"
 
 
 class VisionEncoder(nnx.Module):
@@ -610,10 +641,20 @@ class VisionEncoder(nnx.Module):
 
         match cfg.name:
             case "vitb-mae-egosoup":
-                self.backbone = vit_b16(pretrain_path, rngs=rngs, **kwargs)
+                self.backbone = vit_b16(
+                    pretrain_path,
+                    rngs=rngs,
+                    dtype=cfg.dtype,
+                    **kwargs,
+                )
                 self.emb_dim = 768
             case "vitl-mae-egosoup":
-                self.backbone = vit_l16(pretrain_path, rngs=rngs, **kwargs)
+                self.backbone = vit_l16(
+                    pretrain_path,
+                    rngs=rngs,
+                    dtype=cfg.dtype,
+                    **kwargs,
+                )
                 self.emb_dim = 1024
             case _:
                 raise NotImplementedError(f"Unknown model name: {cfg.name}")

@@ -313,6 +313,9 @@ class TransformerMultimodalActor(nnx.Module):
             cfg.dofs,
         )  # + (cfg.dofs,)
 
+        self.encoder_dtype = (
+            jnp.float16 if cfg.encoder.dtype == "float16" else jnp.float32
+        )
         self.img_encoder = VisionEncoder(cfg.encoder, rngs=rngs)
         self.state_encoder = MLP(
             cfg.dofs,
@@ -351,13 +354,15 @@ class TransformerMultimodalActor(nnx.Module):
         if policy_in.img_feat is None:
             b, t, c, h, w = policy_in.img_rgb[0].shape
             rgb_flat = [
-                rgb.reshape(b * t, c, h, w).astype(jnp.float32)
+                rgb.reshape(b * t, c, h, w).astype(self.encoder_dtype)
                 for rgb in policy_in.img_rgb
             ]
             rgb_cat = jnp.concatenate(rgb_flat, axis=0)
             rgb_cat = normalize(rgb_cat)
             feats = self.img_encoder(rgb_cat, rngs=rngs)
-            feats = jnp.array_split(feats, self.cfg.num_cams, axis=0)
+            feats = jnp.array_split(
+                feats.astype(jnp.float32), self.cfg.num_cams, axis=0
+            )
             feats = [feat.reshape(b, t, *feat.shape[1:]) for feat in feats]
             policy_in = policy_in.replace(img_feat=feats)
         else:
