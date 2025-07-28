@@ -195,6 +195,7 @@ def make_checkpointer(logdir: str, resume: bool = False) -> ocp.CheckpointManage
         item_handlers={
             "train_state": ocp.PyTreeCheckpointHandler(),
             "params": ocp.PyTreeCheckpointHandler(),
+            "ema_params": ocp.PyTreeCheckpointHandler(),
         },
         options=ocp.CheckpointManagerOptions(
             create=True,
@@ -224,10 +225,14 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
         return state
 
     params_placeholder = state.params
-    state_placeholder = dataclasses.replace(state, params={})
+    ema_params_placeholder = state.ema_params
+    state_placeholder = dataclasses.replace(state, params={}, ema_params={})
 
     abstract_params = jax.tree_util.tree_map(
         ocp.utils.to_shape_dtype_struct, params_placeholder
+    )
+    abstract_ema_params = jax.tree_util.tree_map(
+        ocp.utils.to_shape_dtype_struct, ema_params_placeholder
     )
     abstract_state = jax.tree_util.tree_map(
         ocp.utils.to_shape_dtype_struct, state_placeholder
@@ -245,6 +250,15 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
                     abstract_params,
                 ),
             ),
+            ema_params=ocp.args.PyTreeRestore(
+                item=ema_params_placeholder,
+                restore_args=jax.tree.map(
+                    lambda s: ocp.ArrayRestoreArgs(
+                        restore_type=jax.Array, sharding=s.sharding
+                    ),
+                    abstract_ema_params,
+                ),
+            ),
             train_state=ocp.args.PyTreeRestore(
                 item=state_placeholder,
                 restore_args=jax.tree.map(
@@ -258,6 +272,9 @@ def restore_state(ckptr: ocp.CheckpointManager, state: TrainState) -> TrainState
     )
     restored_state = restored["train_state"]
     restored_state = dataclasses.replace(restored_state, params=restored["params"])
+    restored_state = dataclasses.replace(
+        restored_state, ema_params=restored["ema_params"]
+    )
 
     print(f"Restored training state from checkpoint at step {restored_state.step}")
     return restored_state
@@ -274,8 +291,16 @@ def save_state(
     step = int(state.step)
     print(f"Saving checkpoint at step {step} to {ckptr.directory}")
     params = state.params
-    save_train_state = dataclasses.replace(state, params={})
-    ckptr.save(step, items={"train_state": save_train_state, "params": params})
+    ema_params = state.ema_params
+    save_train_state = dataclasses.replace(state, params={}, ema_params={})
+    ckptr.save(
+        step,
+        items={
+            "train_state": save_train_state,
+            "params": params,
+            "ema_params": ema_params,
+        },
+    )
 
     if wait or gcs_path:
         ckptr.wait_until_finished()
