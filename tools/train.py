@@ -457,9 +457,8 @@ def train(cfg: TrainConfig):
             # Log metrics
             meter.iter_toc()
 
-            if jax.process_index() == 0:
-                meter.update(metrics)
-                meter.log_iter_stats(step)
+            meter.update(metrics)
+            meter.log_iter_stats(step)
 
         if cfg.log.profiler.enabled and step == cfg.log.profiler.stop_step:
             stop_trace(cfg.log.profiler, step)
