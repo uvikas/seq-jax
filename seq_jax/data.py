@@ -329,7 +329,14 @@ class TorchDataLoader:
 
                     if (
                         batch[0].state.shape[0] != self._batch_size
-                        or jnp.isnan(batch[0].img_feat).any()
+                        or (
+                            batch[0].img_feat is not None
+                            and jnp.isnan(batch[0].img_feat).any()
+                        )
+                        or (
+                            batch[0].img_rgb is not None
+                            and jnp.isnan(batch[0].img_rgb).any()
+                        )
                         or jnp.isnan(batch[0].state).any()
                         or jnp.isnan(batch[0].noisy_state).any()
                         or jnp.isnan(batch[0].prev_action).any()
