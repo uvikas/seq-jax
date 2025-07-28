@@ -14,9 +14,10 @@ from jax.sharding import SingleDeviceSharding
 
 def normalize(ims: jax.Array) -> jax.Array:
     """Normalize images using ImageNet mean and std."""
-    ims = ims.astype(jnp.float32) / 255.0
-    mean = jnp.array([0.485, 0.456, 0.406], dtype=jnp.float32).reshape(1, 3, 1, 1)
-    std = jnp.array([0.229, 0.224, 0.225], dtype=jnp.float32).reshape(1, 3, 1, 1)
+    dtype = ims.dtype if ims.dtype != jnp.uint8 else jnp.float32
+    ims = ims.astype(dtype) / 255.0
+    mean = jnp.array([0.485, 0.456, 0.406], dtype=dtype).reshape(1, 3, 1, 1)
+    std = jnp.array([0.229, 0.224, 0.225], dtype=dtype).reshape(1, 3, 1, 1)
     ims = (ims - mean) / std
     return ims
 
