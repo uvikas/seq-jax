@@ -37,7 +37,7 @@ class DataConfig:
     dataset_root: str = "/path/to/wds/fold-h16a1fs2-vitb-5min/"
     dataset_names: List[str] = field(default_factory=lambda: ["*"])
     dtype: str = "float32"
-    vision_format: str = "mp4"
+    vision_format: str = "feat"
 
     im_size: int = 224
     dof_size: int = 24
@@ -162,6 +162,7 @@ def pack_batch(
     action_type: str,
     context_len: int,
     pred_len: int,
+    vision_format: str,
 ):
     batch = jax.tree.map(lambda x: jdl.from_dlpack(x), batch)
     vision, states, actions, masks = batch
@@ -178,15 +179,31 @@ def pack_batch(
         size=states.shape,
     )
 
-    obs = Observation(
-        img_rgb=None,
-        img_feat=vision,
-        img_pooled=None,
-        state=states,
-        noisy_state=states + noise,
-        prev_action=actions,
-        mask=masks,
-    )
+    if vision_format == "feat":
+        obs = Observation(
+            img_rgb=None,
+            img_feat=vision,
+            img_pooled=None,
+            state=states,
+            noisy_state=states + noise,
+            prev_action=actions,
+            mask=masks,
+        )
+    elif vision_format == "mp4":
+        # (B, T, V, H, W, 3) -> (B, T, V, 3, H, W)
+        vision = vision.transpose(0, 1, 2, 5, 3, 4)
+        obs = Observation(
+            img_rgb=[vision[:, :, view_idx] for view_idx in range(vision.shape[2])],
+            img_feat=None,
+            img_pooled=None,
+            state=states,
+            noisy_state=states + noise,
+            prev_action=actions,
+            mask=masks,
+        )
+    else:
+        raise ValueError(f"Invalid vision format: {vision_format}")
+
     pred = Prediction(
         img_pooled=None,
         state=None,
@@ -299,6 +316,7 @@ class TorchDataLoader:
             action_type=cfg.action_type,
             context_len=context_len,
             pred_len=pred_len,
+            vision_format=cfg.vision_format,
         )
 
     def __iter__(self):
