@@ -439,7 +439,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
     dataset = wds.WebDataset(
         roots,
         handler=skip_broken_shard,
-        resampled=True,
+        resampled=False,
         shardshuffle=cfg.shardshuffle,
         nodesplitter=wds.shardlists.split_by_node,
         workersplitter=wds.shardlists.split_by_worker,
