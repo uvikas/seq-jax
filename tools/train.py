@@ -444,23 +444,22 @@ def train(cfg: TrainConfig):
                 state, metrics = ptrain_step(state, data, step_rngs[step])
 
         with meter.timer("metrics"):
-            metrics = {
-                key: (
-                    value.item()
-                    if isinstance(value, jnp.ndarray) and value.ndim == 1
-                    else value
-                )
-                for key, value in metrics.items()
-            }
-            metrics["loss"] = {
-                key: value.item() for key, value in metrics["loss"].items()
-            }
+            maybe_item = lambda x: (
+                x.item()
+                if isinstance(x, (jnp.ndarray, jax.Array)) and x.size == 1
+                else x
+            )
+
+            metrics = {key: maybe_item(value) for key, value in metrics.items()}
+            metrics["loss"] = {key: maybe_item(v) for key, v in metrics["loss"].items()}
             metrics["prefetch"] = dataloader.prefetched()
 
             # Log metrics
             meter.iter_toc()
-            meter.update(metrics)
-            meter.log_iter_stats(step)
+
+            if jax.process_index() == 0:
+                meter.update(metrics)
+                meter.log_iter_stats(step)
 
         if cfg.log.profiler.enabled and step == cfg.log.profiler.stop_step:
             stop_trace(cfg.log.profiler, step)
