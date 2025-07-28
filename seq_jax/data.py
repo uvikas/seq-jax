@@ -327,8 +327,14 @@ class TorchDataLoader:
 
 def slide(sample, context_len: int, action_len: int):
     """Turn one contiguous sample into 16-frame samples."""
-    vision, state, action, json = sample
+    pre_vision, pre_state, pre_action, vision, state, action, json = sample
     ar_mask = np.zeros(vision.shape[0])
+
+    if pre_vision.shape[0] > 0:
+        vision = np.concatenate([pre_vision, vision], axis=0)
+        state = np.concatenate([pre_state, state], axis=0)
+        action = np.concatenate([pre_action, action], axis=0)
+        ar_mask = np.concatenate([np.array([0] * pre_vision.shape[0]), ar_mask], axis=0)
 
     if json["begin"]:
         pad_len = context_len - 1
@@ -340,17 +346,19 @@ def slide(sample, context_len: int, action_len: int):
     # torch.unfold / as_strided is fastest, but a plain loop
     # is easier to read and plenty fast for 100 frames.
     samples = []
-    for i in range(vision.shape[0] - context_len + 1 - (action_len - 1)):
-        start, end = i, i + context_len + action_len - 1
-        assert vision[start:end].shape[0] == context_len + action_len - 1
-        assert state[start:end].shape[0] == context_len + action_len - 1
-        assert action[start:end].shape[0] == context_len + action_len - 1
-        assert ar_mask[start:end].shape[0] == context_len + action_len - 1
+    for i in range(vision.shape[0] - context_len - action_len + 1):
+        start, end = i, i + context_len
+        act_start, act_end = i, i + context_len + action_len - 1
+
+        assert vision[start:end].shape[0] == context_len
+        assert state[start:end].shape[0] == context_len
+        assert action[act_start:act_end].shape[0] == context_len + action_len - 1
+        assert ar_mask[start:end].shape[0] == context_len
         samples.append(
             (
                 vision[start:end],
                 state[start:end],
-                action[start:end],
+                action[act_start:act_end],
                 ar_mask[start:end],
             )
         )
@@ -431,7 +439,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
     dataset = wds.WebDataset(
         roots,
         handler=skip_broken_shard,
-        resampled=False,
+        resampled=True,
         shardshuffle=cfg.shardshuffle,
         nodesplitter=wds.shardlists.split_by_node,
         workersplitter=wds.shardlists.split_by_worker,
@@ -442,7 +450,14 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
             dataset.decode("torch")
             .repeat()
             .to_tuple(
-                "vision.npy", "state.npy", "action.npy", "json", missing_is_error=False
+                "pre_vision.npy",
+                "pre_state.npy",
+                "pre_action.npy",
+                "vision.npy",
+                "state.npy",
+                "action.npy",
+                "json",
+                missing_is_error=False,
             )
             .select(finite_sample)
             .map(
