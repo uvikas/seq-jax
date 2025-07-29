@@ -19,7 +19,7 @@ class OptimConfig:
     num_steps: int = 10_000
     final_lr_ratio: float = 0.0  # Final LR is lr * final_lr_ratio
 
-    ema_alpha: float = 1e-5
+    ema_alpha: float = 0.01
 
 
 _EXCLUDE_FROM_WEIGHT_DECAY = (
@@ -48,7 +48,7 @@ def make_optimizer(
 ) -> optax.GradientTransformation:
     """Create optimizer."""
     mask = wd_mask(params)
-    #print(
+    # print(
     #    "Excluding from weight decay: ",
     #    ", ".join(
     #        [
@@ -57,7 +57,7 @@ def make_optimizer(
     #            if not apply_wd
     #        ]
     #    ),
-    #)
+    # )
     return optax.chain(
         optax.clip_by_global_norm(cfg.clip_norm),
         optax.adamw(
