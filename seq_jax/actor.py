@@ -333,6 +333,11 @@ class TransformerMultimodalActor(nnx.Module):
             rngs=rngs,
         )
 
+        # (1, 1, A, 1)
+        self.mtp_weights = (1 / jnp.arange(1, self.pred_len + 1))[
+            None, None, :, None
+        ].astype(jnp.float32)
+
     def compute_loss(
         self, obs: Observation, pred: Prediction, *, rngs: nnx.Rngs
     ) -> jax.Array:
@@ -385,9 +390,10 @@ class TransformerMultimodalActor(nnx.Module):
 
         # Predict actions + compute loss
         pred_act = self.policy(obs_each_mod, attn_mask, rngs=rngs)
+        # (B, T, A, D)
         pred_act = activation_sharding_constraint(pred_act)
 
-        loss = jnp.mean(jnp.square(pred_act.action - pred.action))
+        loss = jnp.mean(jnp.square(pred_act.action - pred.action) * self.mtp_weights)
         loss_dict = {
             "action_loss": loss,
             "im_head_loss": jnp.array([0.0]),
