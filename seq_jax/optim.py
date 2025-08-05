@@ -4,14 +4,22 @@ from typing import Tuple
 import jax
 import optax
 
+from enum import Enum
 from flax import nnx
+
+
+class OptimType(str, Enum):
+    adamw = "adamw"
+    muon = "muon"
 
 
 @dataclass
 class OptimConfig:
+    type: OptimType = OptimType.adamw
     lr: float = 0.0005
     weight_decay: float = 0.01
     betas: Tuple[float, float] = (0.9, 0.95)
+    eps: float = 1e-8
     clip_norm: float = 1.0
 
     scheduler: str = "cosine"
@@ -48,26 +56,33 @@ def make_optimizer(
 ) -> optax.GradientTransformation:
     """Create optimizer."""
     mask = wd_mask(params)
-    # print(
-    #    "Excluding from weight decay: ",
-    #    ", ".join(
-    #        [
-    #            ".".join(map(str, [e.key if e is not None else e.index for e in path]))
-    #            for path, apply_wd in jax.tree.flatten_with_path(mask)[0]
-    #            if not apply_wd
-    #        ]
-    #    ),
-    # )
+
+    match cfg.type:
+        case OptimType.adamw:
+            optimizer = optax.adamw(
+                learning_rate=lr_scheduler,
+                weight_decay=cfg.weight_decay,
+                b1=cfg.betas[0],
+                b2=cfg.betas[1],
+                eps=cfg.eps,
+                mask=mask,
+            )
+        case OptimType.muon:
+            optimizer = optax.contrib.muon(
+                learning_rate=lr_scheduler,
+                weight_decay=cfg.weight_decay,
+                weight_decay_mask=mask,
+                adam_b1=cfg.betas[0],
+                adam_b2=cfg.betas[1],
+                adam_eps_root=cfg.eps,
+                adam_weight_decay=cfg.weight_decay,
+            )
+        case _:
+            raise ValueError(f"Unknown optimizer: {cfg.type}")
+
     return optax.chain(
         optax.clip_by_global_norm(cfg.clip_norm),
-        optax.adamw(
-            learning_rate=lr_scheduler,
-            weight_decay=cfg.weight_decay,
-            b1=cfg.betas[0],
-            b2=cfg.betas[1],
-            eps=1e-8,
-            mask=mask,
-        ),
+        optimizer,
     )
 
 

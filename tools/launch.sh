@@ -4,7 +4,7 @@ export WANDB_API_KEY="REDACTED"
 
 cd ~/seq-jax/
 python tools/train.py \
-    exp_name=fold-cl16a1-concat-38hr-lr5e4-vitb-mb256-it100k-chunk64 \
+    exp_name=fold-cl16a1-concat-38hr-lr5e4-vitb-mb256-it200k-chunk64 \
     log.wandb.notes="concat query pool on node1" \
     dist.mesh_shape=[32,1] \
     dist.init_dist=True \
