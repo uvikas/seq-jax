@@ -21,7 +21,6 @@ from glob import glob
 
 from seq_jax.policy import Observation, Prediction
 
-
 @dataclass
 class DataConfig:
     dataset_type: str = "wds"
@@ -46,39 +45,41 @@ class DataConfig:
 
     action_type: str = "absolute"
 
-    default_pos: List[float] = field(
+    # fmt: off
+    state_mean: List[float] = field(
         default_factory=lambda: [
-            # Left arm
-            1.89,
-            -1.12,
-            1.41,
-            -0.03,
-            1.24,
-            2.82,
-            # Left hand
-            0.17,
-            0.17,
-            0.17,
-            0.17,
-            0.17,
-            -1.22,
-            # Right arm
-            4.39,
-            -2.02,
-            -1.41,
-            3.17,
-            -1.24,
-            3.47,
-            # Right hand
-            0.17,
-            0.17,
-            0.17,
-            0.17,
-            0.17,
-            -1.22,
+            1.82303646, -1.10283649,  1.395443  , -0.06220225,  1.35045611, 2.60661692,  
+            0.72047997,  0.77624358,  0.78167344,  0.78985546, 0.60039102, -1.21542037,  
+            4.27273077, -1.99970782, -1.37522883, 3.27265666, -1.4759352 ,  3.51443517,  
+            0.67678045,  0.70309871, 0.70245722,  0.70357265,  0.51473231, -1.21819474
+        ]
+    )
+    state_std: List[float] = field(
+        default_factory=lambda: [
+            0.24398118, 0.24850998, 0.34922617, 0.30882639, 0.16950019, 0.2844318, 
+            0.39558183, 0.43886775, 0.44438696, 0.44705555, 0.43054879, 0.01232983, 
+            0.19683204, 0.26526851, 0.34127654, 0.25867539, 0.19850393, 0.23688132, 
+            0.4352009 , 0.45476926, 0.44948524, 0.45692358, 0.43131826, 0.01662682
         ]
     )
 
+    action_mean: List[float] = field(
+        default_factory=lambda: [
+            1.82196343, -1.10124719,  1.3940318 , -0.06295186,  1.35070988, 2.60558952,  
+            0.89581989,  0.89581989,  0.89581989,  0.89581989, 0.7211384 , -1.39648438,  
+            4.27223344, -2.00072584, -1.37327486, 3.27182619, -1.47666645,  3.51515418,  
+            0.79915079,  0.79915079, 0.79915079,  0.79915079,  0.62449822, -1.39648438
+        ]
+    )
+    action_std: List[float] = field(
+        default_factory=lambda: [
+            0.24475394, 0.2510877 , 0.3514017 , 0.31131598, 0.17079437, 0.28623279, 
+            0.55860607, 0.55860607, 0.55860607, 0.55860607, 0.55848991, 0.        , 
+            0.19696514, 0.26774223, 0.3441346 , 0.26052894, 0.19932871, 0.23809716, 
+            0.5551222 , 0.5551222 , 0.5551222 , 0.5551222 , 0.55500351, 0.    
+        ]
+    )
+    # fmt: on
     joint_noise_mean: List[float] = field(
         default_factory=lambda: [
             0.0,
@@ -107,7 +108,6 @@ class DataConfig:
             0.0,
         ]
     )
-
     joint_noise_std: List[float] = field(
         default_factory=lambda: [
             0.0213,
@@ -155,7 +155,10 @@ def array_tree_to_info(tree) -> str:
 
 def pack_batch(
     batch,
-    default_pos: np.array,
+    state_mean: np.array,
+    state_std: np.array,
+    action_mean: np.array,
+    action_std: np.array,
     noise_mean: np.array,
     noise_std: np.array,
     noise_scale: float,
@@ -168,8 +171,8 @@ def pack_batch(
     vision, states, actions, masks = batch
 
     if action_type == "absolute":
-        states -= default_pos
-        actions -= default_pos
+        states = (states - state_mean) / state_std
+        actions = (actions - action_mean) / action_std
     elif action_type == "relative":
         actions = actions - states
 
@@ -309,7 +312,10 @@ class TorchDataLoader:
 
         self.pack_batch = partial(
             pack_batch,
-            default_pos=np.array(cfg.default_pos),
+            state_mean=np.array(cfg.state_mean),
+            state_std=np.array(cfg.state_std),
+            action_mean=np.array(cfg.action_mean),
+            action_std=np.array(cfg.action_std),
             noise_mean=np.array(cfg.joint_noise_mean),
             noise_std=np.array(cfg.joint_noise_std),
             noise_scale=cfg.joint_noise_std_scale,
