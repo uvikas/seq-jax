@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from dataclasses import dataclass
+from tqdm import tqdm
 
 from seq_jax.data import DataConfig, make_dataset
 
@@ -81,7 +82,7 @@ def calc_norm(cfg: DataConfig):
         count=0,
     )
 
-    for vision, state, action, ar_mask in dataset:
+    for vision, state, action, ar_mask in tqdm(dataset):
         state_stats.update_batch(state)
         action_stats.update_batch(action)
 
