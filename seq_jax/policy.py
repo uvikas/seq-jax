@@ -83,15 +83,17 @@ class PathRegex:
 ################################################################################
 
 
-def get_1d_sincos_pos_embed(embed_dim: int, length: int) -> jnp.ndarray:
-    """
-    Args:
-      embed_dim: must be even. Final embedding dim = embed_dim
-      length:    number of positions (M)
+def get_act_fn(act_fn: str) -> Callable:
+    match act_fn:
+        case "gelu":
+            return partial(nnx.gelu, approximate=False)
+        case "relu":
+            return jax.nn.relu
+        case _:
+            raise ValueError(f"Unknown activation function: {act_fn}")
 
-    Returns:
-      pos_embed: [length, embed_dim] array of sin/cos embeddings
-    """
+
+def get_1d_sincos_pos_embed(embed_dim: int, length: int) -> jnp.ndarray:
     assert embed_dim % 2 == 0, "embed_dim must be divisible by 2"
     half = embed_dim // 2
 
@@ -110,6 +112,74 @@ def get_1d_sincos_pos_embed(embed_dim: int, length: int) -> jnp.ndarray:
     return emb
 
 
+def _rotate_half(x: jnp.ndarray) -> jnp.ndarray:
+    half = x.shape[-1] // 2
+    x1, x2 = jnp.split(x, 2, axis=-1)
+    return jnp.concatenate((-x2, x1), axis=-1)
+
+
+def _rope_sin_cos(
+    seq_len: int, dim: int, base: int = 10000, dtype: jnp.dtype = jnp.float32
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    assert dim % 2 == 0, "RoPE requires the head dimension to be even"
+    half = dim // 2
+    inv_freq = 1.0 / (base ** (jnp.arange(0, half, dtype=dtype) / half))
+    positions = jnp.arange(seq_len, dtype=dtype)
+    freqs = jnp.einsum("t,d->td", positions, inv_freq)  # [T, half]
+    emb = jnp.concatenate([freqs, freqs], axis=-1)
+    sin = jnp.sin(emb)[None, :, None, :]  # [1, T, 1, D]
+    cos = jnp.cos(emb)[None, :, None, :]  # [1, T, 1, D]
+    return sin, cos
+
+
+def _apply_rope(x: jnp.ndarray, sin: jnp.ndarray, cos: jnp.ndarray) -> jnp.ndarray:
+    return (x * cos) + (_rotate_half(x) * sin)
+
+
+def rope_dot_product_attention(
+    query: jnp.ndarray,
+    key: jnp.ndarray,
+    value: jnp.ndarray,
+    *,
+    bias: jnp.ndarray | None = None,
+    mask: jnp.ndarray | None = None,
+    broadcast_dropout: bool = True,
+    dropout_rng: jnp.ndarray | None = None,
+    dropout_rate: float = 0.0,
+    deterministic: bool = False,
+    dtype: jnp.dtype | None = None,
+    precision=None,
+    module=None,
+):
+    # Shapes: [..., T_q, H, D], [..., T_kv, H, D]
+    d = query.shape[-1]
+    assert d % 2 == 0, "RoPE requires the head dimension to be even"
+    q_len = query.shape[-3]
+    k_len = key.shape[-3]
+
+    sin_q, cos_q = _rope_sin_cos(
+        q_len, d, dtype=query.dtype if dtype is None else dtype
+    )
+    sin_k, cos_k = _rope_sin_cos(k_len, d, dtype=key.dtype if dtype is None else dtype)
+
+    query = _apply_rope(query, sin_q, cos_q)
+    key = _apply_rope(key, sin_k, cos_k)
+
+    return jax.nn.dot_product_attention(
+        query,
+        key,
+        value,
+        bias=bias,
+        mask=mask,
+        broadcast_dropout=broadcast_dropout,
+        dropout_rng=dropout_rng,
+        dropout_rate=dropout_rate,
+        deterministic=deterministic,
+        dtype=dtype,
+        precision=precision,
+    )
+
+
 class MLP(nnx.Module):
     """Multi-layer perceptron."""
 
@@ -119,6 +189,7 @@ class MLP(nnx.Module):
         output_dim: int,
         hidden_sizes: List[int] = [],
         stable_init: bool = False,
+        act_fn: str = "gelu",
         *,
         rngs: nnx.Rngs,
     ):
@@ -128,7 +199,7 @@ class MLP(nnx.Module):
                 layers.append(nnx.Linear(input_dim, size, rngs=rngs))
             else:
                 layers.append(nnx.Linear(hidden_sizes[i - 1], size, rngs=rngs))
-            layers.append(nnx.elu)
+            layers.append(get_act_fn(act_fn))
         if len(hidden_sizes) > 0:
             layers.append(nnx.Linear(hidden_sizes[-1], output_dim, rngs=rngs))
         else:
@@ -171,6 +242,7 @@ class TokenwiseMLP(nnx.Module):
         output_dim: int,
         hidden_sizes: List[int] = [],
         stable_init: bool = False,
+        act_fn: str = "gelu",
         *,
         rngs: nnx.Rngs,
     ):
@@ -186,6 +258,7 @@ class TokenwiseMLP(nnx.Module):
                 output_dim=output_dim,
                 hidden_sizes=hidden_sizes,
                 stable_init=stable_init,
+                act_fn=act_fn,
                 rngs=rngs,
             )
             for i in range(num_tokens)
@@ -432,6 +505,7 @@ class MLPBlock(nnx.Module):
         w_in: int,
         mlp_d: int,
         dropout: float = 0.0,
+        act_fn: str = "gelu",
         *,
         rngs: nnx.Rngs,
     ):
@@ -453,7 +527,7 @@ class MLPBlock(nnx.Module):
             kernel_init=nnx.initializers.xavier_uniform(),
             bias_init=nnx.initializers.normal(stddev=1e-6),
         )
-        self.af = partial(nnx.gelu, approximate=True)
+        self.af = get_act_fn(act_fn)
 
         self.dropout_1 = nnx.Dropout(rate=dropout)
         self.dropout_2 = nnx.Dropout(rate=dropout)
@@ -483,17 +557,21 @@ class TransformerEncoderBlock(nnx.Module):
         attn_dropout: float = 0.0,
         mlp_dropout: float = 0.0,
         layernorm: Callable = partial(nnx.LayerNorm, epsilon=1e-6),
+        act_fn: str = "gelu",
+        rope: bool = False,
         *,
         rngs: nnx.Rngs,
     ):
         self.hidden_d = hidden_d
         self.ln_1 = layernorm(hidden_d, rngs=rngs)
+        attn_fn = rope_dot_product_attention if rope else jax.nn.dot_product_attention
         self.attention = nnx.MultiHeadAttention(
             num_heads=n_heads,
             in_features=hidden_d,
             qkv_features=hidden_d,
             out_features=hidden_d,
             dropout_rate=attn_dropout,
+            attention_fn=attn_fn,
             decode=False,
             rngs=rngs,
         )
@@ -502,6 +580,7 @@ class TransformerEncoderBlock(nnx.Module):
             hidden_d,
             mlp_d,
             dropout=mlp_dropout,
+            act_fn=act_fn,
             rngs=rngs,
         )
 
@@ -539,6 +618,8 @@ class TransformerEncoder(nnx.Module):
         mlp_dropout: float = 0.0,
         layernorm: Callable = partial(nnx.LayerNorm, epsilon=1e-6),
         last_layer_norm: bool = False,
+        act_fn: str = "gelu",
+        rope: bool = False,
         *,
         rngs: nnx.Rngs,
     ):
@@ -551,6 +632,8 @@ class TransformerEncoder(nnx.Module):
                     mlp_d=mlp_d,
                     attn_dropout=attn_dropout,
                     mlp_dropout=mlp_dropout,
+                    act_fn=act_fn,
+                    rope=rope,
                     rngs=rngs,
                 )
             )
@@ -585,6 +668,7 @@ class TransformerEncoder(nnx.Module):
 class TransformerPolicyConfig:
     causal: bool = True
     in_proj_hidden_sizes: List[int] = field(default_factory=lambda: [1024])
+
     embed_dim: int = 768
     num_blocks: int = 12
     num_heads: int = 12
@@ -592,10 +676,14 @@ class TransformerPolicyConfig:
     attn_dropout: float = 0.0
     mlp_dropout: float = 0.0
     last_layer_norm: bool = False
+    qk_norm: bool = False
+
     head_hidden_sizes: List[int] = field(default_factory=lambda: [])
-    normalize_input: bool = True
     im_loss_weight: float = 0.1
     multihead_proj: bool = False
+
+    rope: bool = False
+    activation_fn: str = "gelu"
 
 
 class TransformerConcatPolicy(nnx.Module):
@@ -625,6 +713,7 @@ class TransformerConcatPolicy(nnx.Module):
             cfg.embed_dim,
             cfg.in_proj_hidden_sizes,
             stable_init=False,
+            act_fn=cfg.activation_fn,
             rngs=rngs,
         )
         self.act = partial(nnx.gelu, approximate=False)
@@ -641,6 +730,8 @@ class TransformerConcatPolicy(nnx.Module):
             cfg.attn_dropout,
             cfg.mlp_dropout,
             cfg.last_layer_norm,
+            cfg.activation_fn,
+            cfg.rope,
             rngs=rngs,
         )
 
@@ -650,6 +741,7 @@ class TransformerConcatPolicy(nnx.Module):
                     cfg.embed_dim,
                     sum(self.output_dim),
                     cfg.head_hidden_sizes,
+                    act_fn=cfg.activation_fn,
                     rngs=rngs,
                 )
                 for _ in range(pred_len)
@@ -659,6 +751,7 @@ class TransformerConcatPolicy(nnx.Module):
                 cfg.embed_dim,
                 sum(self.output_dim),
                 cfg.head_hidden_sizes,
+                act_fn=cfg.activation_fn,
                 rngs=rngs,
             )
 
@@ -731,6 +824,7 @@ class TransformerMultimodalPolicy(nnx.Module):
             inp_embed_dims,
             sum(tokens_per_mod),
             cfg.embed_dim,
+            act_fn=cfg.activation_fn,
             rngs=rngs,
         )
 
@@ -742,6 +836,8 @@ class TransformerMultimodalPolicy(nnx.Module):
             cfg.attn_dropout,
             cfg.mlp_dropout,
             cfg.last_layer_norm,
+            cfg.activation_fn,
+            cfg.rope,
             rngs=rngs,
         )
 
@@ -750,6 +846,7 @@ class TransformerMultimodalPolicy(nnx.Module):
                 MLP(
                     cfg.embed_dim,
                     out_dims[i],
+                    act_fn=cfg.activation_fn,
                     rngs=rngs,
                 )
                 for _ in range(pred_len)
