@@ -836,11 +836,11 @@ class TransformerMultimodalPolicy(nnx.Module):
             cfg.embed_dim,
             cfg.num_heads,
             int(cfg.embed_dim * cfg.mlp_ratio),
-            cfg.attn_dropout,
-            cfg.mlp_dropout,
-            cfg.last_layer_norm,
-            cfg.activation_fn,
-            cfg.rope,
+            attn_dropout=cfg.attn_dropout,
+            mlp_dropout=cfg.mlp_dropout,
+            last_layer_norm=cfg.last_layer_norm,
+            act_fn=cfg.activation_fn,
+            rope=cfg.rope,
             rngs=rngs,
         )
 
