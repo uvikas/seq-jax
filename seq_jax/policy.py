@@ -705,6 +705,8 @@ class TransformerConcatPolicy(nnx.Module):
 
         self.input_dim = tuple(inp_dims)
         self.output_dim = tuple(out_dims)
+        self.rope = cfg.rope
+
         # Must be static tuple
         self.split_output = tuple(np.array(out_dims).cumsum())
 
@@ -766,7 +768,8 @@ class TransformerConcatPolicy(nnx.Module):
         x = self.in_proj(obs, rngs=rngs)
         # (T, B, d) -> (B, T, d)
         x = x.transpose(1, 0, 2)
-        x = x + self.pos_embed
+        if not self.rope:
+            x = x + self.pos_embed
         x = self.encoder(x, attn_mask, rngs=rngs)
 
         if self.multihead_proj:
@@ -877,7 +880,8 @@ class TransformerMultimodalPolicy(nnx.Module):
 
         # Apply pos embed across time. Tokens in the same timestep get the same pos embed.
         # pos_embed: (1, T, D) -> (1, T, 1, D)
-        x = x + jnp.expand_dims(self.pos_embed, axis=2)
+        if not self.rope:
+            x = x + jnp.expand_dims(self.pos_embed, axis=2)
 
         batch_sz, ctx_len, n_token_per_step, hidden_d = x.shape
         # (B, T, N_total, D) -> (B, T * N_total, D)
