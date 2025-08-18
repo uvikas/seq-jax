@@ -250,16 +250,37 @@ class TransformerConcatActor(nnx.Module):
         pred_act = self.policy(obs_cat, attn_mask, rngs=rngs)
         pred_act = activation_sharding_constraint(pred_act)
 
-        loss = jnp.mean(jnp.square(pred_act.action - pred.action))
+        action_loss = jnp.mean(jnp.square(pred_act.action - pred.action))
+        im_head_loss = jnp.mean(
+            jnp.square(
+                pred_act.img_pooled[:, 0, :, :, :] - pred.img_pooled[:, 0, :, :, :]
+            )
+        )
+        im_left_loss = jnp.mean(
+            jnp.square(
+                pred_act.img_pooled[:, 1, :, :, :] - pred.img_pooled[:, 1, :, :, :]
+            )
+        )
+        im_right_loss = jnp.mean(
+            jnp.square(
+                pred_act.img_pooled[:, 2, :, :, :] - pred.img_pooled[:, 2, :, :, :]
+            )
+        )
+        total_loss = (
+            action_loss
+            + (im_head_loss + im_left_loss + im_right_loss)
+            * self.cfg.policy.im_loss_weight
+        )
+
         loss_dict = {
-            "action_loss": loss,
-            "im_head_loss": jnp.array([0.0]),
-            "im_left_loss": jnp.array([0.0]),
-            "im_right_loss": jnp.array([0.0]),
+            "action_loss": action_loss,
+            "im_head_loss": im_head_loss,
+            "im_left_loss": im_left_loss,
+            "im_right_loss": im_right_loss,
             "state_loss": jnp.array([0.0]),
-            "total_loss": loss,
+            "total_loss": total_loss,
         }
-        return loss, loss_dict
+        return total_loss, loss_dict
 
     def pool_feats(
         self, feat: List[jnp.ndarray], *, rngs: nnx.Rngs
@@ -393,16 +414,37 @@ class TransformerMultimodalActor(nnx.Module):
         # (B, T, A, D)
         pred_act = activation_sharding_constraint(pred_act)
 
-        loss = jnp.mean(jnp.square(pred_act.action - pred.action) * self.mtp_weights)
+        action_loss = jnp.mean(jnp.square(pred_act.action - pred.action))
+        im_left_loss = jnp.mean(
+            jnp.square(
+                pred_act.img_pooled[:, 0, :, :, :] - pred.img_pooled[:, 0, :, :, :]
+            )
+        )
+        im_head_loss = jnp.mean(
+            jnp.square(
+                pred_act.img_pooled[:, 1, :, :, :] - pred.img_pooled[:, 1, :, :, :]
+            )
+        )
+        im_right_loss = jnp.mean(
+            jnp.square(
+                pred_act.img_pooled[:, 2, :, :, :] - pred.img_pooled[:, 2, :, :, :]
+            )
+        )
+        total_loss = (
+            action_loss
+            + (im_head_loss + im_left_loss + im_right_loss)
+            * self.cfg.policy.im_loss_weight
+        )
+
         loss_dict = {
-            "action_loss": loss,
-            "im_head_loss": jnp.array([0.0]),
-            "im_left_loss": jnp.array([0.0]),
-            "im_right_loss": jnp.array([0.0]),
+            "action_loss": action_loss,
+            "im_head_loss": im_head_loss,
+            "im_left_loss": im_left_loss,
+            "im_right_loss": im_right_loss,
             "state_loss": jnp.array([0.0]),
-            "total_loss": loss,
+            "total_loss": total_loss,
         }
-        return loss, loss_dict
+        return total_loss, loss_dict
 
     def pool_feats(
         self, feat: List[jnp.ndarray], *, rngs: nnx.Rngs

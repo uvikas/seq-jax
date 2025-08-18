@@ -41,8 +41,8 @@ class Observation:
 
 @struct.dataclass
 class Prediction:
-    # Pooled img features (B, T, A, C) * V
-    img_pooled: List[jnp.ndarray] | None
+    # Pooled img features (B, V, T, A, C)
+    img_pooled: jnp.ndarray | None
     # Robot state (B, T, A, D)
     state: jnp.ndarray | None
     # Action (B, T, A, D)
@@ -679,7 +679,7 @@ class TransformerPolicyConfig:
     qk_norm: bool = False
 
     head_hidden_sizes: List[int] = field(default_factory=lambda: [])
-    im_loss_weight: float = 0.1
+    im_loss_weight: float = 0.0
     multihead_proj: bool = False
 
     rope: bool = False
