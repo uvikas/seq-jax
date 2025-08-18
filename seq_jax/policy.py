@@ -812,6 +812,7 @@ class TransformerMultimodalPolicy(nnx.Module):
         self.context_len = context_len
         self.pred_len = pred_len
         self.multihead_proj = cfg.multihead_proj
+        self.rope = cfg.rope
 
         # (1, T, D)
         self.pos_embed = nnx.Variable(
