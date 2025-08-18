@@ -151,6 +151,7 @@ def rope_dot_product_attention(
     precision=None,
     module=None,
 ):
+    # TODO: many of these args are not used
     # Shapes: [..., T_q, H, D], [..., T_kv, H, D]
     d = query.shape[-1]
     assert d % 2 == 0, "RoPE requires the head dimension to be even"
@@ -165,7 +166,7 @@ def rope_dot_product_attention(
     query = _apply_rope(query, sin_q, cos_q)
     key = _apply_rope(key, sin_k, cos_k)
 
-    return jax.nn.dot_product_attention(
+    return nnx.dot_product_attention(
         query,
         key,
         value,
