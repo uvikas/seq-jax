@@ -564,7 +564,7 @@ class TransformerEncoderBlock(nnx.Module):
     ):
         self.hidden_d = hidden_d
         self.ln_1 = layernorm(hidden_d, rngs=rngs)
-        attn_fn = rope_dot_product_attention if rope else jax.nn.dot_product_attention
+        attn_fn = rope_dot_product_attention if rope else nnx.dot_product_attention
         self.attention = nnx.MultiHeadAttention(
             num_heads=n_heads,
             in_features=hidden_d,
