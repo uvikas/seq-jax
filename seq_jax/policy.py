@@ -41,7 +41,7 @@ class Observation:
 
 @struct.dataclass
 class Prediction:
-    # Pooled img features (B, V, T, A, C)
+    # Pooled img features (B, T, A, C) * V
     img_pooled: jnp.ndarray | None
     # Robot state (B, T, A, D)
     state: jnp.ndarray | None

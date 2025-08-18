@@ -415,20 +415,10 @@ class TransformerMultimodalActor(nnx.Module):
         pred_act = activation_sharding_constraint(pred_act)
 
         action_loss = jnp.mean(jnp.square(pred_act.action - pred.action))
-        im_left_loss = jnp.mean(
-            jnp.square(
-                pred_act.img_pooled[:, 0, :, :, :] - pred.img_pooled[:, 0, :, :, :]
-            )
-        )
-        im_head_loss = jnp.mean(
-            jnp.square(
-                pred_act.img_pooled[:, 1, :, :, :] - pred.img_pooled[:, 1, :, :, :]
-            )
-        )
+        im_left_loss = jnp.mean(jnp.square(pred_act.img_pooled[0] - pred.img_pooled[0]))
+        im_head_loss = jnp.mean(jnp.square(pred_act.img_pooled[1] - pred.img_pooled[1]))
         im_right_loss = jnp.mean(
-            jnp.square(
-                pred_act.img_pooled[:, 2, :, :, :] - pred.img_pooled[:, 2, :, :, :]
-            )
+            jnp.square(pred_act.img_pooled[2] - pred.img_pooled[2])
         )
         total_loss = (
             action_loss
