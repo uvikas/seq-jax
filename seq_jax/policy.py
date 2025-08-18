@@ -151,7 +151,6 @@ def rope_dot_product_attention(
     precision=None,
     module=None,
 ):
-    # TODO: many of these args are not used
     # Shapes: [..., T_q, H, D], [..., T_kv, H, D]
     d = query.shape[-1]
     assert d % 2 == 0, "RoPE requires the head dimension to be even"
@@ -178,6 +177,7 @@ def rope_dot_product_attention(
         deterministic=deterministic,
         dtype=dtype,
         precision=precision,
+        module=module,
     )
 
 
