@@ -140,7 +140,6 @@ def rope_dot_product_attention(
     query: jnp.ndarray,
     key: jnp.ndarray,
     value: jnp.ndarray,
-    *,
     bias: jnp.ndarray | None = None,
     mask: jnp.ndarray | None = None,
     broadcast_dropout: bool = True,
