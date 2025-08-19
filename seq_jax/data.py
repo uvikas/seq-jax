@@ -21,6 +21,7 @@ from glob import glob
 
 from seq_jax.policy import Observation, Prediction
 
+
 @dataclass
 class DataConfig:
     dataset_type: str = "wds"
@@ -80,7 +81,6 @@ class DataConfig:
         ]
     )
 
-    
     # fmt: on
     joint_noise_mean: List[float] = field(
         default_factory=lambda: [
@@ -198,7 +198,7 @@ def pack_batch(
         # (B, T, V, H, W, 3) -> (B, T, V, 3, H, W)
         vision = vision.transpose(0, 1, 2, 5, 3, 4)
         obs = Observation(
-            img_rgb=[vision[:, :, view_idx] for view_idx in range(vision.shape[2])],
+            img_rgb=[vision[:, :, i] for i in range(vision.shape[2])],
             img_feat=None,
             img_pooled=None,
             state=states,
@@ -210,8 +210,11 @@ def pack_batch(
         raise ValueError(f"Invalid vision format: {vision_format}")
 
     pred = Prediction(
-        img_pooled=None,
-        state=None,
+        img_pooled=None,  # Need to pool in actor first
+        state=jnp.stack(
+            [states[:, i + 1 : i + pred_len + 1, ...] for i in range(context_len)],
+            axis=1,
+        ),
         action=jnp.stack(
             [actions[:, i : i + pred_len, ...] for i in range(context_len)],
             axis=1,
@@ -377,20 +380,21 @@ def slide(sample, context_len: int, action_len: int):
         ar_mask = np.concatenate([np.array([1] * pad_len), ar_mask], axis=0)
 
     # torch.unfold / as_strided is fastest, but a plain loop
-    # is easier to read and plenty fast for 100 frames.
+    # is easier to read and plenty fast.
     samples = []
-    for i in range(vision.shape[0] - context_len - action_len + 1):
+    for i in range(vision.shape[0] - context_len - action_len):
         start, end = i, i + context_len
+        mod_start, mod_end = i, i + context_len + action_len
         act_start, act_end = i, i + context_len + action_len - 1
 
-        assert vision[start:end].shape[0] == context_len
-        assert state[start:end].shape[0] == context_len
+        assert vision[mod_start:mod_end].shape[0] == context_len + action_len
+        assert state[mod_start:mod_end].shape[0] == context_len + action_len
         assert action[act_start:act_end].shape[0] == context_len + action_len - 1
         assert ar_mask[start:end].shape[0] == context_len
         samples.append(
             (
-                vision[start:end],
-                state[start:end],
+                vision[mod_start:mod_end],
+                state[mod_start:mod_end],
                 action[act_start:act_end],
                 ar_mask[start:end],
             )

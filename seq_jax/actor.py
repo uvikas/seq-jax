@@ -360,7 +360,7 @@ class TransformerMultimodalActor(nnx.Module):
         ].astype(jnp.float32)
 
     def compute_loss(
-        self, obs: Observation, pred: Prediction, *, rngs: nnx.Rngs
+        self, obs: Observation, target: Prediction, *, rngs: nnx.Rngs
     ) -> jax.Array:
         # (B, H, T*block_size, T*block_size)
         attn_mask = make_block_attn_mask(
@@ -370,12 +370,7 @@ class TransformerMultimodalActor(nnx.Module):
             causal=self.cfg.policy.causal,
         )
 
-        policy_in = jax.tree.map(
-            lambda x: x[:, : self.context_len] if x is not None else None,
-            obs,
-            is_leaf=lambda x: x is None,
-        )
-
+        policy_in = obs
         # Extract features from rgb
         if policy_in.img_feat is None:
             b, t, c, h, w = policy_in.img_rgb[0].shape
@@ -401,24 +396,41 @@ class TransformerMultimodalActor(nnx.Module):
             policy_in.img_feat,
             rngs=rngs,
         )
+        obs_img_pooled = [feats[:, : self.context_len] for feats in img_pooled]
+        target = target.replace(
+            img_pooled=[
+                jnp.stack(
+                    [
+                        feats[:, i + 1 : i + self.pred_len + 1, ...]
+                        for i in range(self.context_len)
+                    ]
+                )
+                for feats in img_pooled
+            ]
+        )
+
         # (B, T, dofs) -> (B, T, 1, D)
         state_embed = self.state_encoder(
-            policy_in.noisy_state[:, :, None, :], rngs=rngs
+            policy_in.noisy_state[:, : self.context_len, None, :], rngs=rngs
         )
 
         # Tokens per mod List[B, T, N, D] * num_mod
-        obs_each_mod = img_pooled + [state_embed]
+        obs_each_mod = obs_img_pooled + [state_embed]
 
         # Predict actions + compute loss
         pred_act = self.policy(obs_each_mod, attn_mask, rngs=rngs)
         # (B, T, A, D)
         pred_act = activation_sharding_constraint(pred_act)
 
-        action_loss = jnp.mean(jnp.square(pred_act.action - pred.action))
-        im_left_loss = jnp.mean(jnp.square(pred_act.img_pooled[0] - pred.img_pooled[0]))
-        im_head_loss = jnp.mean(jnp.square(pred_act.img_pooled[1] - pred.img_pooled[1]))
+        action_loss = jnp.mean(jnp.square(pred_act.action - target.action))
+        im_left_loss = jnp.mean(
+            jnp.square(pred_act.img_pooled[0] - target.img_pooled[0])
+        )
+        im_head_loss = jnp.mean(
+            jnp.square(pred_act.img_pooled[1] - target.img_pooled[1])
+        )
         im_right_loss = jnp.mean(
-            jnp.square(pred_act.img_pooled[2] - pred.img_pooled[2])
+            jnp.square(pred_act.img_pooled[2] - target.img_pooled[2])
         )
         total_loss = (
             action_loss
