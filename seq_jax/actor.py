@@ -398,12 +398,14 @@ class TransformerMultimodalActor(nnx.Module):
         )
         obs_img_pooled = [feats[:, : self.context_len] for feats in img_pooled]
         target = target.replace(
+            # (B, C+A, D) -> (B, C, A, D)
             img_pooled=[
                 jnp.stack(
                     [
                         feats[:, i + 1 : i + self.pred_len + 1, ...]
                         for i in range(self.context_len)
-                    ]
+                    ],
+                    axis=1,
                 )
                 for feats in img_pooled
             ]
