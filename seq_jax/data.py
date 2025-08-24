@@ -45,6 +45,7 @@ class DataConfig:
     cam_names: List[str] = field(default_factory=lambda: ["left", "head", "right"])
 
     action_type: str = "absolute"
+    hflip: bool = False
 
     # fmt: off
     state_mean: List[float] = field(
@@ -153,6 +154,42 @@ def tree_to_info(tree, interp_func: Callable[[Any], str] = str) -> str:
 def array_tree_to_info(tree) -> str:
     """Converts a PyTree of arrays into a human-readable string for logging."""
     return tree_to_info(tree, lambda x: f"{x.shape}@{x.dtype}")
+
+
+def mirror_arms(j: jnp.ndarray) -> jnp.ndarray:
+    # return [-2*np.pi - j[0], -np.pi - j[1], -j[2], -np.pi - j[3], -j[4], -j[5]]
+    bias = jnp.array([-2 * jnp.pi, -jnp.pi, 0.0, -jnp.pi, 0.0, 0.0], dtype=j.dtype)
+    return -j + bias
+
+
+def hflip_joints(joints: jnp.ndarray):
+    larm, lhand, rarm, rhand = jnp.split(joints, 4, axis=1)
+    return jnp.concatenate([mirror_arms(rarm), rhand, mirror_arms(larm), lhand], axis=1)
+
+
+def hflip(batch, hflip: bool = False):
+
+    if not hflip:
+        return batch
+    if np.random.random() < 0.5:
+        return batch
+
+    vision, states, actions, masks = batch
+    # Reverse (B, T, V, H, W, 3)
+    left, head, right = (
+        vision[:, :, 0, :, :, :],
+        vision[:, :, 1, :, :, :],
+        vision[:, :, 2, :, :, :],
+    )
+    left = left[:, :, :, ::-1, :]
+    right = right[:, :, :, ::-1, :]
+    vision = jnp.stack([left, head, right], axis=2)
+
+    # Hflip actions
+    actions = hflip_joints(actions)
+    states = hflip_joints(states)
+
+    return vision, states, actions, masks
 
 
 def pack_batch(
@@ -505,6 +542,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
                 )
             )
             .unlisted()
+            .map(partial(hflip, hflip=cfg.hflip))
             .shuffle(cfg.shufflebuffer)
             .batched(cfg.global_batch_size // jax.process_count(), partial=False)
         )
