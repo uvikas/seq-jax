@@ -289,6 +289,7 @@ class TokenwiseMLP(nnx.Module):
 class PoolType(str, Enum):
     query = "query"
     seq = "seq"
+    mean = "mean"
 
 
 @dataclass
@@ -302,6 +303,23 @@ class PoolConfig:
     mlp_ratio: float = 2.0
     attn_dropout: float = 0.0
     mlp_dropout: float = 0.0
+
+
+class MeanPool(nnx.Module):
+    """Mean pooling"""
+
+    def __init__(self, input_dim: int, output_dim: int, *, rngs: nnx.Rngs):
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+
+        self.proj = nnx.Linear(
+            in_features=input_dim,
+            out_features=output_dim,
+            rngs=rngs,
+        )
+
+    def __call__(self, x: jnp.ndarray, *, rngs: nnx.Rngs) -> jnp.ndarray:
+        return self.proj(x.mean(axis=-2))
 
 
 class QueryPool(nnx.Module):

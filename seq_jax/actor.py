@@ -19,6 +19,7 @@ from seq_jax.policy import (
     PoolConfig,
     PoolType,
     MLP,
+    MeanPool,
 )
 from seq_jax.vision import VisionEncoder, VisionEncoderConfig, normalize
 
@@ -116,6 +117,12 @@ def make_block_attn_mask(
 
 def make_pool(cfg: ModelConfig, rngs: nnx.Rngs):
     match cfg.pool.type:
+        case PoolType.mean:
+            return MeanPool(
+                cfg.encoder.embed_dim,
+                cfg.policy.embed_dim,
+                rngs=rngs,
+            )
         case PoolType.query:
             return QueryPool(
                 cfg.encoder.embed_dim,
