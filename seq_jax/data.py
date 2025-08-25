@@ -213,7 +213,7 @@ def pack_batch(
         states = (states - state_mean) / state_std
         actions = (actions - action_mean) / action_std
     elif action_type == "relative":
-        actions = actions - states
+        actions = actions - states[:, :-1, :]
         states = (states - state_mean) / state_std
 
     noise = np.random.normal(
