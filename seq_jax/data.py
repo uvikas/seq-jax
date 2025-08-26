@@ -175,15 +175,17 @@ def hflip(batch, hflip: bool = False):
         return batch
 
     vision, states, actions, masks = batch
-    # Reverse (B, T, V, H, W, 3)
+    # (T, V, H, W, 3)
     left, head, right = (
-        vision[:, :, 0, :, :, :],
-        vision[:, :, 1, :, :, :],
-        vision[:, :, 2, :, :, :],
+        vision[:, 0, :, :, :],
+        vision[:, 1, :, :, :],
+        vision[:, 2, :, :, :],
     )
-    left = left[:, :, :, ::-1, :]
-    right = right[:, :, :, ::-1, :]
-    vision = jnp.stack([left, head, right], axis=2)
+    # Hflip wrist images
+    left = left[:, :, ::-1, :]
+    right = right[:, :, ::-1, :]
+    head = head[:, :, ::-1, :]
+    vision = jnp.stack([right, head, left], axis=1)
 
     # Hflip actions
     actions = hflip_joints(actions)
