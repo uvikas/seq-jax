@@ -156,15 +156,15 @@ def array_tree_to_info(tree) -> str:
     return tree_to_info(tree, lambda x: f"{x.shape}@{x.dtype}")
 
 
-def mirror_arms(j: jnp.ndarray) -> jnp.ndarray:
+def mirror_arms(j: np.ndarray) -> np.ndarray:
     # return [-2*np.pi - j[0], -np.pi - j[1], -j[2], -np.pi - j[3], -j[4], -j[5]]
-    bias = jnp.array([-2 * jnp.pi, -jnp.pi, 0.0, -jnp.pi, 0.0, 0.0], dtype=j.dtype)
+    bias = np.array([-2 * np.pi, -np.pi, 0.0, -np.pi, 0.0, 0.0], dtype=j.dtype)
     return -j + bias
 
 
-def hflip_joints(joints: jnp.ndarray):
-    larm, lhand, rarm, rhand = jnp.split(joints, 4, axis=1)
-    return jnp.concatenate([mirror_arms(rarm), rhand, mirror_arms(larm), lhand], axis=1)
+def hflip_joints(joints: np.ndarray):
+    larm, lhand, rarm, rhand = np.split(joints, 4, axis=1)
+    return np.concatenate([mirror_arms(rarm), rhand, mirror_arms(larm), lhand], axis=1)
 
 
 def hflip(batch, hflip: bool = False):
@@ -185,7 +185,7 @@ def hflip(batch, hflip: bool = False):
     left = left[:, :, ::-1, :]
     right = right[:, :, ::-1, :]
     head = head[:, :, ::-1, :]
-    vision = jnp.stack([right, head, left], axis=1)
+    vision = np.stack([right, head, left], axis=1)
 
     # Hflip actions
     actions = hflip_joints(actions)
