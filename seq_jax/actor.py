@@ -370,7 +370,7 @@ class TransformerMultimodalActor(nnx.Module):
         ].astype(jnp.float32)
 
     def compute_loss(
-        self, obs: Observation, target: Prediction, *, rngs: nnx.Rngs
+        self, step: int, obs: Observation, target: Prediction, *, rngs: nnx.Rngs
     ) -> jax.Array:
         # (B, H, T*block_size, T*block_size)
         attn_mask = make_block_attn_mask(
@@ -452,7 +452,7 @@ class TransformerMultimodalActor(nnx.Module):
         )
 
         total_loss = action_loss
-        if obs.step > self.cfg.policy.im_loss_begin:
+        if step > self.cfg.policy.im_loss_begin:
             total_loss += (
                 im_head_loss + im_left_loss + im_right_loss
             ) * self.cfg.policy.im_loss_weight
