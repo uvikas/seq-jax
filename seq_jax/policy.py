@@ -23,7 +23,7 @@ from seq_jax.dist import activation_sharding_constraint
 
 @struct.dataclass
 class Observation:
-    step: int
+    step: int | None
     # Image rgb (B, T, H, W, 3) * V
     img_rgb: List[jnp.ndarray] | None
     # Image features (B, T, P, C) * V
