@@ -407,14 +407,12 @@ class TransformerMultimodalActor(nnx.Module):
         target = target.replace(
             # (B, C+A, D) -> (B, C, A, D)
             img_pooled=[
-                jax.lax.stop_gradient(
-                    jnp.stack(
-                        [
-                            feats[:, i + 1 : i + self.pred_len + 1, ...]
-                            for i in range(self.context_len)
-                        ],
-                        axis=1,
-                    )
+                jnp.stack(
+                    [
+                        feats[:, i + 1 : i + self.pred_len + 1, ...]
+                        for i in range(self.context_len)
+                    ],
+                    axis=1,
                 )
                 for feats in img_pooled
             ]
@@ -435,13 +433,19 @@ class TransformerMultimodalActor(nnx.Module):
 
         action_loss = jnp.mean(jnp.square(pred_act.action - target.action))
         im_left_loss = jnp.mean(
-            jnp.square(pred_act.img_pooled[0] - target.img_pooled[0])
+            jnp.square(
+                pred_act.img_pooled[0] - jax.lax.stop_gradient(target.img_pooled[0])
+            )
         )
         im_head_loss = jnp.mean(
-            jnp.square(pred_act.img_pooled[1] - target.img_pooled[1])
+            jnp.square(
+                pred_act.img_pooled[1] - jax.lax.stop_gradient(target.img_pooled[1])
+            )
         )
         im_right_loss = jnp.mean(
-            jnp.square(pred_act.img_pooled[2] - target.img_pooled[2])
+            jnp.square(
+                pred_act.img_pooled[2] - jax.lax.stop_gradient(target.img_pooled[2])
+            )
         )
         total_loss = (
             action_loss
