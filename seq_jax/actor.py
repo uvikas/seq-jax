@@ -276,11 +276,13 @@ class TransformerConcatActor(nnx.Module):
                 - jax.lax.stop_gradient(pred.img_pooled[:, 2, :, :, :])
             )
         )
-        total_loss = action_loss
-        if step > self.cfg.policy.im_loss_begin:
-            total_loss += (
-                im_head_loss + im_left_loss + im_right_loss
-            ) * self.cfg.policy.im_loss_weight
+        im_total = (
+            im_head_loss + im_left_loss + im_right_loss
+        ) * self.cfg.policy.im_loss_weight
+        use_im = (jnp.asarray(step) > self.cfg.policy.im_loss_begin).astype(
+            action_loss.dtype
+        )
+        total_loss = action_loss + use_im * im_total
 
         loss_dict = {
             "action_loss": action_loss,
@@ -451,11 +453,13 @@ class TransformerMultimodalActor(nnx.Module):
             )
         )
 
-        total_loss = action_loss
-        if step > self.cfg.policy.im_loss_begin:
-            total_loss += (
-                im_head_loss + im_left_loss + im_right_loss
-            ) * self.cfg.policy.im_loss_weight
+        im_total = (
+            im_head_loss + im_left_loss + im_right_loss
+        ) * self.cfg.policy.im_loss_weight
+        use_im = (jnp.asarray(step) > self.cfg.policy.im_loss_begin).astype(
+            action_loss.dtype
+        )
+        total_loss = action_loss + use_im * im_total
 
         loss_dict = {
             "action_loss": action_loss,
