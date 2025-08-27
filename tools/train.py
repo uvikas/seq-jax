@@ -444,6 +444,8 @@ def train(cfg: TrainConfig):
             if step == start_step:
                 print(array_tree_to_info(data))
 
+            data[0] = data[0].replace(step=step)
+
         with meter.timer("fwd_bwd"):
             # Perform training step
             with set_mesh(mesh):

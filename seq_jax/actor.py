@@ -273,11 +273,11 @@ class TransformerConcatActor(nnx.Module):
                 pred_act.img_pooled[:, 2, :, :, :] - pred.img_pooled[:, 2, :, :, :]
             )
         )
-        total_loss = (
-            action_loss
-            + (im_head_loss + im_left_loss + im_right_loss)
-            * self.cfg.policy.im_loss_weight
-        )
+        total_loss = action_loss
+        if obs.step > self.cfg.policy.im_loss_begin:
+            total_loss += (
+                im_head_loss + im_left_loss + im_right_loss
+            ) * self.cfg.policy.im_loss_weight
 
         loss_dict = {
             "action_loss": action_loss,

@@ -23,6 +23,7 @@ from seq_jax.dist import activation_sharding_constraint
 
 @struct.dataclass
 class Observation:
+    step: int
     # Image rgb (B, T, H, W, 3) * V
     img_rgb: List[jnp.ndarray] | None
     # Image features (B, T, P, C) * V
@@ -697,6 +698,7 @@ class TransformerPolicyConfig:
     qk_norm: bool = False
 
     head_hidden_sizes: List[int] = field(default_factory=lambda: [])
+    im_loss_begin: int = 0
     im_loss_weight: float = 0.0
     multihead_proj: bool = False
 
