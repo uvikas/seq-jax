@@ -226,7 +226,6 @@ def pack_batch(
 
     if vision_format == "feat":
         obs = Observation(
-            step=None,
             img_rgb=None,
             img_feat=vision,
             img_pooled=None,
@@ -239,7 +238,6 @@ def pack_batch(
         # (B, T, V, H, W, 3) -> (B, T, V, 3, H, W)
         vision = vision.transpose(0, 1, 2, 5, 3, 4)
         obs = Observation(
-            step=None,
             img_rgb=[vision[:, :, i] for i in range(vision.shape[2])],
             img_feat=None,
             img_pooled=None,

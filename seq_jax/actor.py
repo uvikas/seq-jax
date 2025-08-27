@@ -201,7 +201,7 @@ class TransformerConcatActor(nnx.Module):
         return norm_flat.reshape(obs.shape)
 
     def compute_loss(
-        self, obs: Observation, pred: Prediction, *, rngs: nnx.Rngs
+        self, step: int, obs: Observation, pred: Prediction, *, rngs: nnx.Rngs
     ) -> jax.Array:
         attn_mask = make_attn_mask(
             obs.mask, self.cfg.policy.num_heads, causal=self.cfg.policy.causal
@@ -277,7 +277,7 @@ class TransformerConcatActor(nnx.Module):
             )
         )
         total_loss = action_loss
-        if obs.step > self.cfg.policy.im_loss_begin:
+        if step > self.cfg.policy.im_loss_begin:
             total_loss += (
                 im_head_loss + im_left_loss + im_right_loss
             ) * self.cfg.policy.im_loss_weight
