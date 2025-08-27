@@ -260,17 +260,20 @@ class TransformerConcatActor(nnx.Module):
         action_loss = jnp.mean(jnp.square(pred_act.action - pred.action))
         im_head_loss = jnp.mean(
             jnp.square(
-                pred_act.img_pooled[:, 0, :, :, :] - pred.img_pooled[:, 0, :, :, :]
+                pred_act.img_pooled[:, 0, :, :, :]
+                - jax.lax.stop_gradient(pred.img_pooled[:, 0, :, :, :])
             )
         )
         im_left_loss = jnp.mean(
             jnp.square(
-                pred_act.img_pooled[:, 1, :, :, :] - pred.img_pooled[:, 1, :, :, :]
+                pred_act.img_pooled[:, 1, :, :, :]
+                - jax.lax.stop_gradient(pred.img_pooled[:, 1, :, :, :])
             )
         )
         im_right_loss = jnp.mean(
             jnp.square(
-                pred_act.img_pooled[:, 2, :, :, :] - pred.img_pooled[:, 2, :, :, :]
+                pred_act.img_pooled[:, 2, :, :, :]
+                - jax.lax.stop_gradient(pred.img_pooled[:, 2, :, :, :])
             )
         )
         total_loss = action_loss
@@ -447,11 +450,12 @@ class TransformerMultimodalActor(nnx.Module):
                 pred_act.img_pooled[2] - jax.lax.stop_gradient(target.img_pooled[2])
             )
         )
-        total_loss = (
-            action_loss
-            + (im_head_loss + im_left_loss + im_right_loss)
-            * self.cfg.policy.im_loss_weight
-        )
+
+        total_loss = action_loss
+        if obs.step > self.cfg.policy.im_loss_begin:
+            total_loss += (
+                im_head_loss + im_left_loss + im_right_loss
+            ) * self.cfg.policy.im_loss_weight
 
         loss_dict = {
             "action_loss": action_loss,
