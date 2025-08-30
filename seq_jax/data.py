@@ -506,7 +506,7 @@ def make_dataset(cfg: DataConfig, context_len: int, pred_len: int) -> wds.WebDat
         )
 
     np.random.shuffle(roots)
-    roots = roots[: int(len(roots) * cfg.proportion)]
+    roots = roots[: int(len(roots) * cfg.prop)]
     print("Webdataset using", len(roots), "shards")
 
     names = discover_dataset_names(cfg.dataset_root, cfg.dataset_names)
