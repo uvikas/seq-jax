@@ -33,7 +33,7 @@ class DataConfig:
     prefetch_device_factor: int = 5
     num_workers: int = 4
     prefetch_factor: int | None = None
-    proportion: float = 1.0
+    prop: float = 1.0
 
     dataset_root: str = "/path/to/wds/fold-h16a1fs2-vitb-5min/"
     dataset_names: List[str] = field(default_factory=lambda: ["*"])
