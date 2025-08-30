@@ -470,7 +470,6 @@ class VisionTransformerExtractor(VisionTransformer):
     def __call__(self, x: jax.Array, *, mode: int, rngs: nnx.Rngs) -> jax.Array:
         """
         Main forward pass for feature extraction with different modes.
-        Applies stop_gradient to the output.
         """
 
         # Get features after blocks and final norm
@@ -489,7 +488,7 @@ class VisionTransformerExtractor(VisionTransformer):
         else:
             raise NotImplementedError(f"Mode {mode} not implemented.")
 
-        output = jax.lax.stop_gradient(output)
+        # output = jax.lax.stop_gradient(output)
         return output
 
 
