@@ -703,6 +703,7 @@ class TransformerPolicyConfig:
 
     rope: bool = False
     activation_fn: str = "gelu"
+    mask_ratio: float = 0.0
 
 
 class TransformerConcatPolicy(nnx.Module):
@@ -832,6 +833,7 @@ class TransformerMultimodalPolicy(nnx.Module):
         self.pred_len = pred_len
         self.multihead_proj = cfg.multihead_proj
         self.rope = cfg.rope
+        self.mask_ratio = cfg.mask_ratio
 
         # (1, T, D)
         self.pos_embed = nnx.Variable(
@@ -877,6 +879,8 @@ class TransformerMultimodalPolicy(nnx.Module):
             for i in range(len(out_dims))
         ]
 
+        self.mask_token = nnx.Param(jax.random.normal(rngs.params(), (cfg.embed_dim,)))
+
     def __call__(
         self,
         obs_each_mod: List[jnp.array],
@@ -906,6 +910,16 @@ class TransformerMultimodalPolicy(nnx.Module):
         batch_sz, ctx_len, n_token_per_step, hidden_d = x.shape
         # (B, T, N_total, D) -> (B, T * N_total, D)
         x = jnp.reshape(x, (x.shape[0], -1, *x.shape[3:]))
+
+        # Dropout tokens
+        if self.mask_ratio > 0.0:
+            mask = jax.random.bernoulli(
+                rngs.dropout(),
+                1 - self.mask_ratio,
+                (batch_sz, ctx_len * n_token_per_step, 1),
+            )
+            x = x * mask + self.mask_token[None, None, :] * (1 - mask)
+
         # (B, T * N_total, D) -> (B, T * N_total, D)
         x = self.encoder(x, attn_mask, rngs=rngs)
 
