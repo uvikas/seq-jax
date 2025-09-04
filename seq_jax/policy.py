@@ -908,36 +908,17 @@ class TransformerMultimodalPolicy(nnx.Module):
             x = x + jnp.expand_dims(self.pos_embed, axis=2)
 
         batch_sz, ctx_len, n_token_per_step, hidden_d = x.shape
-
-        # Dropout wrist tokens
-        if self.mask_ratio > 0.0:
-            # List[B, T, N_i, D] * num_mod
-            emb_each_mod = jnp.split(x, np.cumsum(tokens_per_mod), axis=-2)
-
-            b, t, n, d = emb_each_mod[0].shape
-
-            left_mask = jax.random.bernoulli(
-                rngs.dropout(),
-                1 - self.mask_ratio,
-                (b, t, n, 1),
-            )
-            right_mask = jax.random.bernoulli(
-                rngs.dropout(),
-                1 - self.mask_ratio,
-                (b, t, n, 1),
-            )
-            emb_each_mod[0] = emb_each_mod[0] * left_mask + self.mask_token[
-                None, None, None, :
-            ] * (1 - left_mask)
-            emb_each_mod[2] = emb_each_mod[2] * right_mask + self.mask_token[
-                None, None, None, :
-            ] * (1 - right_mask)
-
-            # List[B, T, N_i, D] * num_mod -> (B, T, N_total, D)
-            x = jnp.concatenate(emb_each_mod, axis=-2)
-
         # (B, T, N_total, D) -> (B, T * N_total, D)
         x = jnp.reshape(x, (x.shape[0], -1, *x.shape[3:]))
+
+        # Dropout tokens
+        if self.mask_ratio > 0.0:
+            mask = jax.random.bernoulli(
+                rngs.dropout(),
+                1 - self.mask_ratio,
+                (batch_sz, ctx_len * n_token_per_step, 1),
+            )
+            x = x * mask + self.mask_token[None, None, :] * (1 - mask)
 
         # (B, T * N_total, D) -> (B, T * N_total, D)
         x = self.encoder(x, attn_mask, rngs=rngs)
