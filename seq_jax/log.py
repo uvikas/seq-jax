@@ -311,7 +311,8 @@ class IterTrainMeter(object):
         metrics: Dict[str, Any],
     ):
         for name, value in metrics["loss"].items():
-            self.losses[name].add_value(value)
+            if name in self.losses:
+                self.losses[name].add_value(value)
         self.lr = metrics["lr"]
         self.num_samples += metrics["batch_size"]
         self.prefetched_size = metrics["prefetch"]
