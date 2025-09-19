@@ -314,7 +314,7 @@ class IterTrainMeter(object):
         for name, value in metrics["loss"].items():
             if name in self.losses:
                 self.losses[name].add_value(value)
-        self.per_token_loss = metrics["per_token_loss"]
+        self.per_token_loss = metrics["loss"]["per_token_loss"]
         self.lr = metrics["lr"]
         self.num_samples += metrics["batch_size"]
         self.prefetched_size = metrics["prefetch"]
