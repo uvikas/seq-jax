@@ -376,7 +376,6 @@ class IterTrainMeter(object):
                         keys=[f"step_{cur_iter}"],
                         title="Per-token loss",
                         xname="token_index",
-                        yname="loss",
                     ),
                 }
                 | {f"train/iter_{name}": loss_stats[name] for name in self.loss_names}
