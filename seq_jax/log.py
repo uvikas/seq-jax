@@ -367,6 +367,14 @@ class IterTrainMeter(object):
                     "train/grad_norm": stats["grad_norm"],
                     "train/param_norm": stats["param_norm"],
                     "train/grad_cos_sim": stats["grad_cos_sim"],
+                    "per_token_loss": wandb.plot.line_series(
+                        xs=[list(range(len(loss_stats["per_token_loss"])))],
+                        ys=[np.asarray(loss_stats["per_token_loss"]).tolist()],
+                        keys=[f"step_{cur_iter}"],
+                        title="Per-token loss",
+                        xname="token_index",
+                        yname="loss",
+                    ),
                 }
                 | {f"train/iter_{name}": loss_stats[name] for name in self.loss_names}
                 | {

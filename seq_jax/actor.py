@@ -31,6 +31,7 @@ from seq_jax.vision import VisionEncoder, VisionEncoderConfig, normalize
 class ModelType(str, Enum):
     concat = "concat"
     multimodal = "multimodal"
+    perceiver = "perceiver"
 
 
 @dataclass
@@ -436,38 +437,48 @@ class TransformerMultimodalActor(nnx.Module):
         # (B, T, A, D)
         pred_act = activation_sharding_constraint(pred_act)
 
-        action_loss = jnp.mean(jnp.square(pred_act.action - target.action))
-        im_left_loss = jnp.mean(
+        per_token_action_loss = jnp.mean(
+            jnp.square(pred_act.action - target.action) * self.mtp_weights,
+            axis=(0, 2, 3),
+        )
+
+        per_token_im_left_loss = jnp.mean(
             jnp.square(
                 pred_act.img_pooled[0] - jax.lax.stop_gradient(target.img_pooled[0])
             )
+            * self.mtp_weights,
+            axis=(0, 2, 3),
         )
-        im_head_loss = jnp.mean(
+        per_token_im_head_loss = jnp.mean(
             jnp.square(
                 pred_act.img_pooled[1] - jax.lax.stop_gradient(target.img_pooled[1])
             )
+            * self.mtp_weights,
+            axis=(0, 2, 3),
         )
-        im_right_loss = jnp.mean(
+        per_token_im_right_loss = jnp.mean(
             jnp.square(
                 pred_act.img_pooled[2] - jax.lax.stop_gradient(target.img_pooled[2])
             )
+            * self.mtp_weights,
+            axis=(0, 2, 3),
         )
 
-        im_total = (
-            im_head_loss + im_left_loss + im_right_loss
+        per_token_im_loss = (
+            per_token_im_head_loss + per_token_im_left_loss + per_token_im_right_loss
         ) * self.cfg.policy.im_loss_weight
-        use_im = (jnp.asarray(step) > self.cfg.policy.im_loss_begin).astype(
-            action_loss.dtype
-        )
-        total_loss = action_loss + use_im * im_total
+
+        per_token_loss = per_token_action_loss + per_token_im_loss
+        total_loss = jnp.mean(per_token_loss)
 
         loss_dict = {
-            "action_loss": action_loss,
-            "im_head_loss": im_head_loss,
-            "im_left_loss": im_left_loss,
-            "im_right_loss": im_right_loss,
+            "action_loss": jnp.mean(per_token_action_loss),
+            "im_head_loss": jnp.mean(per_token_im_head_loss),
+            "im_left_loss": jnp.mean(per_token_im_left_loss),
+            "im_right_loss": jnp.mean(per_token_im_right_loss),
             "state_loss": jnp.array([0.0]),
             "total_loss": total_loss,
+            "per_token_loss": per_token_loss,
         }
         return total_loss, loss_dict
 
@@ -503,11 +514,17 @@ class TransformerMultimodalActor(nnx.Module):
         return feats
 
 
+class TransformerPerceiverActor(nnx.Module):
+    pass
+
+
 def make_model(cfg: ModelConfig, rngs: nnx.Rngs):
     match cfg.name:
         case ModelType.concat:
             return TransformerConcatActor(cfg, rngs=rngs)
         case ModelType.multimodal:
             return TransformerMultimodalActor(cfg, rngs=rngs)
+        case ModelType.perceiver:
+            return TransformerPerceiverActor(cfg, rngs=rngs)
         case _:
             raise ValueError(f"Invalid model type: {cfg.name}")
