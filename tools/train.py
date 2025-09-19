@@ -453,7 +453,7 @@ def train(cfg: TrainConfig):
             maybe_item = lambda x: (
                 x.item()
                 if isinstance(x, (jnp.ndarray, jax.Array)) and x.size == 1
-                else x
+                else np.asarray(x).tolist()
             )
 
             metrics = {key: maybe_item(value) for key, value in metrics.items()}
