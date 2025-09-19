@@ -447,21 +447,21 @@ class TransformerMultimodalActor(nnx.Module):
                 pred_act.img_pooled[0] - jax.lax.stop_gradient(target.img_pooled[0])
             )
             * self.mtp_weights,
-            axis=(0, 2, 3),
+            axis=(0, 2, 3, 4),
         )
         per_token_im_head_loss = jnp.mean(
             jnp.square(
                 pred_act.img_pooled[1] - jax.lax.stop_gradient(target.img_pooled[1])
             )
             * self.mtp_weights,
-            axis=(0, 2, 3),
+            axis=(0, 2, 3, 4),
         )
         per_token_im_right_loss = jnp.mean(
             jnp.square(
                 pred_act.img_pooled[2] - jax.lax.stop_gradient(target.img_pooled[2])
             )
             * self.mtp_weights,
-            axis=(0, 2, 3),
+            axis=(0, 2, 3, 4),
         )
 
         per_token_im_loss = (
