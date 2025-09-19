@@ -280,6 +280,7 @@ class IterTrainMeter(object):
 
         self.loss_names = loss_names
         self.losses = {name: ScalarMeter(log_period) for name in loss_names}
+        self.per_token_loss = None
 
         self.lr = None
         self.batch_size = 0
@@ -313,6 +314,7 @@ class IterTrainMeter(object):
         for name, value in metrics["loss"].items():
             if name in self.losses:
                 self.losses[name].add_value(value)
+        self.per_token_loss = metrics["per_token_loss"]
         self.lr = metrics["lr"]
         self.num_samples += metrics["batch_size"]
         self.prefetched_size = metrics["prefetch"]
@@ -342,7 +344,7 @@ class IterTrainMeter(object):
 
         loss_stats = {
             name: self.losses[name].get_win_median() for name in self.loss_names
-        }
+        } | {"per_token_loss": self.per_token_loss}
 
         latency_stats = {
             f"{name}_s": time_s for name, time_s in self.timer.get_stats().items()
