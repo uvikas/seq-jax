@@ -1,6 +1,7 @@
 """Calculate normalization statistics for a dataset."""
 
 import argparse
+import os
 import numpy as np
 import pytest
 
@@ -93,7 +94,7 @@ def calc_norm(cfg: DataConfig):
 if __name__ == "__main__":
     cfg = DataConfig(
         chunked=True,
-        dataset_root="gs://DATA_BUCKET/chunk64-vitb",
+        dataset_root=os.environ["DATA_ROOT"],
         dataset_names=["*"],
         global_batch_size=256,
         shufflebuffer=4096,

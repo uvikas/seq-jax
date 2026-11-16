@@ -18,7 +18,7 @@ from collections import defaultdict, deque
 @dataclass
 class WandbConfig:
     project: str = "seq-jax"
-    entity: str = "my-gcp-project"
+    entity: str = ""
     mode: str = "disabled"
     notes: str = ""
 
@@ -76,7 +76,7 @@ def init_wandb(cfg: "TrainConfig"):
             dir=os.path.join(cfg.logdir, cfg.exp_name),
             name=cfg.exp_name,
             project=cfg.log.wandb.project,
-            entity=cfg.log.wandb.entity,
+            entity=cfg.log.wandb.entity or None,
             config=asdict(cfg),
             mode=cfg.log.wandb.mode,
             notes=cfg.log.wandb.notes,

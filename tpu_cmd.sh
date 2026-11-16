@@ -154,9 +154,10 @@ function tpu {
     # =============== TPU Project Specific Definitions ===============
     export PROJECT_HOME="$HOME"
     export PROJECT_NAME='seq-jax'
+    set -a; source "${PROJECT_HOME}/${PROJECT_NAME}/.env"; set +a
     tpu_zone='us-central2-b'
-    if [ "$1" = "my-gcp-project" ]; then
-        tpu_project='my-gcp-project'
+    if [ -n "$TPU_PROJECT" ] && [ "$1" = "$TPU_PROJECT" ]; then
+        tpu_project="$TPU_PROJECT"
         tpu_zone='us-central2-b'
         tpu_gen='v4'
     else

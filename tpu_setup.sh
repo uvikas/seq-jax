@@ -1,5 +1,7 @@
 #! /bin/bash
 
+set -a; source .env; set +a
+
 sudo apt-get update && sudo apt-get install -y \
     build-essential \
     python-is-python3 \
@@ -132,4 +134,4 @@ EndOfFile
 # setup project dirs
 mkdir output
 mkdir pretrained
-gsutil -m cp -r gs://PRETRAINED_BUCKET/mae_pretrain_egosoup_vit_base pretrained/
+gsutil -m cp -r ${PRETRAINED_GCS} pretrained/
